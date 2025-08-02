@@ -185,7 +185,7 @@ def assign_rooms(
     for i, r in fam.iterrows():
         bookings.append(
             Booking(
-                idx=i,
+                idx=int(i),
                 family=str(r.get("family", "")).strip(),
                 room_type=str(r.get("room_type", "")).strip(),
                 check_in=str(r.get("check_in", "")).strip(),
@@ -221,7 +221,9 @@ def assign_rooms(
 
     assigned_rows, unassigned_rows = [], []
     for b in bookings:
-        row = {
+        base = {
+            "_idx": b.idx,       # <--- for legacy callers
+            "id": b.idx,         # <--- extra compatibility
             "family": b.family,
             "room_type": b.room_type,
             "check_in": b.check_in,
@@ -230,15 +232,19 @@ def assign_rooms(
         }
         room_assigned = assigned_map.get(b.idx, "")
         if room_assigned:
+            row = dict(base)
             row["room"] = room_assigned
             assigned_rows.append(row)
         else:
+            row = dict(base)
             row["room"] = ""
             unassigned_rows.append(row)
 
     return pd.DataFrame(assigned_rows), pd.DataFrame(unassigned_rows)
 
-# Keep backward compatibility with older core.py call-sites
+# -----------------------------------------------------------------------------
+# Back-compat wrapper for older code paths (core.py still calls this)
+# -----------------------------------------------------------------------------
 def assign_per_type(families_arg, rooms_arg, *args, **kwargs):
     """
     Older call-sites pass (families, rooms, maybe_other, log_func) and
@@ -247,8 +253,6 @@ def assign_per_type(families_arg, rooms_arg, *args, **kwargs):
       • Detect the last callable among *args/**kwargs as log_func.
       • Return (assigned_df, unassigned_df, meta) where meta is a placeholder.
     """
-    import pandas as pd
-
     # 1) Coerce inputs to DataFrames
     families_df = families_arg if isinstance(families_arg, pd.DataFrame) else pd.DataFrame(families_arg)
     rooms_df    = rooms_arg    if isinstance(rooms_arg,    pd.DataFrame) else pd.DataFrame(rooms_arg)
@@ -263,7 +267,7 @@ def assign_per_type(families_arg, rooms_arg, *args, **kwargs):
     # 3) Delegate to the modern solver
     assigned_df, unassigned_df = assign_rooms(families_df, rooms_df, log_func=log_func)
 
-    # 4) Return a 3-tuple for legacy callers (meta placeholder = None)
+    # 4) Legacy shape: return three values
     meta = None
     return assigned_df, unassigned_df, meta
 
