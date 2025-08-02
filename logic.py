@@ -5,7 +5,7 @@ def is_available(bookings, check_in, check_out):
     for b in bookings:
         existing_check_in = b["check_in"]
         existing_check_out = b["check_out"]
-        # If the new booking overlaps with an existing one
+        # Check for overlap
         if not (check_out <= existing_check_in or check_in >= existing_check_out):
             return False
     return True
@@ -15,7 +15,7 @@ def assign_rooms(families_df, rooms_df):
         row["id"]: {
             "type": row["type"],
             "max_occupancy": row["max_occupancy"],
-            "bookings": []  # List of {"check_in": date, "check_out": date}
+            "bookings": []  # Track check-in/check-out dates
         } for _, row in rooms_df.iterrows()
     }
 
@@ -26,7 +26,7 @@ def assign_rooms(families_df, rooms_df):
         try:
             check_in = datetime.strptime(fam["check_in"], "%d/%m/%Y")
             check_out = datetime.strptime(fam["check_out"], "%d/%m/%Y")
-        except Exception as e:
+        except Exception:
             unassigned.append(fam)
             continue
 
@@ -40,7 +40,7 @@ def assign_rooms(families_df, rooms_df):
                 assignments.append({
                     "family": fam["id"],
                     "room": room_id,
-                    "check_in": fam["check_in"],
+                    "check_in": fam["check_in"],    # keep original string format
                     "check_out": fam["check_out"]
                 })
                 assigned = True
