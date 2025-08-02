@@ -49,4 +49,4 @@ if "assigned" in st.session_state:
 if "unassigned" in st.session_state and not st.session_state["unassigned"].empty:
     st.warning(f"⚠️ {len(st.session_state['unassigned'])} families could not be assigned to any room.")
     st.subheader("Unassigned Families")
-    s
+    st.dataframe(st.session_state["unassigned"], use_container_width=True)
