@@ -6,13 +6,13 @@ from logic import (
     assign_rooms,
     validate_constraints,
     rebuild_calendar_from_assignments,
-    explain_soft_constraints,  # NEW
+    explain_soft_constraints,  # diagnostics panel
 )
 
 st.set_page_config(page_title="Room Assignment", layout="wide")
 st.title("🏕️ Room Assignment System")
 
-# --- Helpers -----------------------------------------------------------------
+# --- CSV reading -------------------------------------------------------------
 def _read_csv(file):
     # UTF-8 with BOM handles Hebrew headers; keep_default_na/na_filter stop blanks becoming "nan"
     try:
@@ -21,6 +21,7 @@ def _read_csv(file):
         file.seek(0)
         return pd.read_csv(file, keep_default_na=False, na_filter=False)
 
+# --- Session init ------------------------------------------------------------
 def _ensure_session_keys():
     for k, v in [
         ("families", pd.DataFrame()),
@@ -28,19 +29,21 @@ def _ensure_session_keys():
         ("assigned", pd.DataFrame()),
         ("unassigned", pd.DataFrame()),
         ("log_lines", []),
+        ("range_mode", False),
     ]:
         if k not in st.session_state:
             st.session_state[k] = v
 
 _ensure_session_keys()
 
+# --- Logging collector --------------------------------------------------------
 def log_collector():
     def _log(msg):
-        from datetime import datetime
-        ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        ts = dt.now().strftime("%Y-%m-%d %H:%M:%S")
         st.session_state["log_lines"].append(f"[{ts}] {msg}")
     return _log
 
+# --- Run assignment -----------------------------------------------------------
 def run_assignment():
     try:
         st.session_state["log_lines"] = []
@@ -66,7 +69,7 @@ def run_assignment():
     except Exception as e:
         st.error(f"❌ Assignment error: {e}")
 
-# Ensure we always have datetime columns, even for empty DataFrames
+# --- Date helper columns (for filtering views) -------------------------------
 def with_dt_cols(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
     if df.empty:
@@ -83,11 +86,54 @@ def with_dt_cols(df: pd.DataFrame) -> pd.DataFrame:
         df["check_out_dt"] = pd.to_datetime(pd.Series([pd.NaT] * len(df)))
     return df
 
+# --- Display helpers ----------------------------------------------------------
 def _is_empty_opt(val):
     if pd.isna(val):
         return True
     s = str(val).strip().lower()
     return s in {"", "nan", "none", "null"}
+
+def highlight_forced(row):
+    return ["background-color: #fff9c4"] * len(row) if not _is_empty_opt(row.get("forced_room", "")) else [""] * len(row)
+
+# --- NEW: Family + Room-Type filter helpers ----------------------------------
+def _family_filters_ui(names, key_prefix: str):
+    c1, c2 = st.columns([2, 1])
+    with c1:
+        sel = st.multiselect("Filter by family", names, key=f"fam_sel_{key_prefix}")
+    with c2:
+        q = st.text_input("Search name", key=f"fam_q_{key_prefix}", placeholder="type to search…")
+    return sel, q
+
+def _roomtype_filters_ui(types, key_prefix: str):
+    c1, c2 = st.columns([2, 1])
+    with c1:
+        sel = st.multiselect("Filter by room type", types, key=f"rt_sel_{key_prefix}")
+    with c2:
+        q = st.text_input("Search type", key=f"rt_q_{key_prefix}", placeholder="e.g. Family, Cabin")
+    return sel, q
+
+def _apply_filters(df: pd.DataFrame,
+                   fam_sel: list[str], fam_q: str,
+                   rt_sel: list[str],  rt_q: str) -> pd.DataFrame:
+    """Apply family + room_type filters to any dataframe that has those columns."""
+    if df is None or df.empty:
+        return df
+
+    out = df
+    if fam_sel:
+        out = out[out["family"].astype(str).isin(fam_sel)]
+    if fam_q and fam_q.strip():
+        out = out[out["family"].astype(str).str.contains(fam_q.strip(), case=False, na=False)]
+
+    if rt_sel:
+        out = out[out["room_type"].astype(str).isin(rt_sel)]
+    if rt_q and rt_q.strip():
+        out = out[out["room_type"].astype(str).str.contains(rt_q.strip(), case=False, na=False)]
+
+    return out
+
+# =============================== UI ==========================================
 
 # --- Upload section ----------------------------------------------------------
 st.markdown("### 📁 Upload Guest & Room Lists")
@@ -119,20 +165,33 @@ if not st.session_state["families"].empty and not st.session_state["rooms"].empt
     if st.button("🔁 Recalculate Assignment"):
         run_assignment()
 
-# --- Styling helper ----------------------------------------------------------
-def highlight_forced(row):
-    return ["background-color: #fff9c4"] * len(row) if not _is_empty_opt(row.get("forced_room", "")) else [""] * len(row)
-
-# --- Assignment Overview -----------------------------------------------------
+# --- Assignment Overview (All) -----------------------------------------------
 st.markdown("## 📋 Full Assignment Overview")
 col1, col2 = st.columns(2)
 
 with col1:
     if not st.session_state["assigned"].empty:
         st.subheader("✅ Assigned Families (All)")
-        styled = st.session_state["assigned"].style.apply(highlight_forced, axis=1)
-        st.write(styled)
-        csv = st.session_state["assigned"].to_csv(index=False).encode("utf-8-sig")
+
+        # NEW: combined family + room_type filters
+        all_families = sorted(st.session_state["assigned"]["family"].astype(str).unique())
+        all_types = sorted(st.session_state["assigned"]["room_type"].astype(str).unique())
+
+        fam_sel_all, fam_q_all = _family_filters_ui(all_families, key_prefix="all")
+        rt_sel_all, rt_q_all = _roomtype_filters_ui(all_types, key_prefix="all")
+
+        assigned_all_view = _apply_filters(
+            st.session_state["assigned"],
+            fam_sel_all, fam_q_all,
+            rt_sel_all,  rt_q_all,
+        )
+
+        if not assigned_all_view.empty:
+            st.write(assigned_all_view.style.apply(highlight_forced, axis=1))
+        else:
+            st.info("📭 No rows match the current filters.")
+
+        csv = assigned_all_view.to_csv(index=False).encode("utf-8-sig")
         st.download_button("📥 Download Assigned", csv, "assigned_families.csv", "text/csv")
 
 with col2:
@@ -148,9 +207,6 @@ with col2:
 # --- Date filtering ----------------------------------------------------------
 st.markdown("---")
 st.markdown("## 📅 View Assignments for Date or Range")
-
-if "range_mode" not in st.session_state:
-    st.session_state["range_mode"] = False
 
 toggle_label = "🔄 Switch to Range View" if not st.session_state["range_mode"] else "🔄 Switch to Single Date View"
 if st.button(toggle_label):
@@ -180,6 +236,19 @@ if st.session_state["range_mode"]:
             (unassigned_df["check_in_dt"] < end_dt) & (unassigned_df["check_out_dt"] > start_dt)
         ]
 
+        # NEW: family + room_type filters for the range subset
+        range_fams  = sorted(assigned_filtered["family"].astype(str).unique())
+        range_types = sorted(assigned_filtered["room_type"].astype(str).unique())
+
+        fam_sel_r, fam_q_r = _family_filters_ui(range_fams,  key_prefix="range")
+        rt_sel_r,  rt_q_r  = _roomtype_filters_ui(range_types, key_prefix="range")
+
+        assigned_filtered = _apply_filters(
+            assigned_filtered,
+            fam_sel_r, fam_q_r,
+            rt_sel_r,  rt_q_r,
+        )
+
         st.subheader(f"✅ Assigned Families from {start_date.strftime('%d/%m/%Y')} to {end_date.strftime('%d/%m/%Y')}")
         if not assigned_filtered.empty:
             st.write(
@@ -187,7 +256,7 @@ if st.session_state["range_mode"]:
                 .style.apply(highlight_forced, axis=1)
             )
         else:
-            st.info("📭 No assigned families in that range.")
+            st.info("📭 No assigned families in that range (after filters).")
 
         st.subheader(f"⚠️ Unassigned Families from {start_date.strftime('%d/%m/%Y')} to {end_date.strftime('%d/%m/%Y')}")
         if not unassigned_filtered.empty:
@@ -210,6 +279,19 @@ else:
         (unassigned_df["check_in_dt"] <= selected_dt) & (unassigned_df["check_out_dt"] > selected_dt)
     ]
 
+    # NEW: family + room_type filters for the single-date subset
+    date_fams  = sorted(assigned_filtered["family"].astype(str).unique())
+    date_types = sorted(assigned_filtered["room_type"].astype(str).unique())
+
+    fam_sel_d, fam_q_d = _family_filters_ui(date_fams,  key_prefix="date")
+    rt_sel_d,  rt_q_d  = _roomtype_filters_ui(date_types, key_prefix="date")
+
+    assigned_filtered = _apply_filters(
+        assigned_filtered,
+        fam_sel_d, fam_q_d,
+        rt_sel_d,  rt_q_d,
+    )
+
     st.subheader(f"✅ Assigned Families on {selected_date.strftime('%d/%m/%Y')}")
     if not assigned_filtered.empty:
         st.write(
@@ -217,7 +299,7 @@ else:
             .style.apply(highlight_forced, axis=1)
         )
     else:
-        st.info("📭 No assigned families on that date.")
+        st.info("📭 No assigned families on that date (after filters).")
 
     st.subheader(f"⚠️ Unassigned Families on {selected_date.strftime('%d/%m/%Y')}")
     if not unassigned_filtered.empty:
@@ -246,7 +328,6 @@ if not st.session_state["assigned"].empty:
         sel_idx = st.selectbox("Select row to edit", list(range(len(fam_rows))), format_func=lambda i: row_labels[i])
 
         sel_rt = fam_rows.loc[sel_idx, "room_type"]
-        # candidate rooms by type from the uploaded rooms list
         candidate_rooms = st.session_state["rooms"]
         candidate_rooms = candidate_rooms[candidate_rooms["room_type"].astype(str).str.strip() == str(sel_rt).strip()]
         candidate_rooms = sorted(candidate_rooms["room"].astype(str).str.strip().unique())
@@ -300,7 +381,6 @@ if not st.session_state["families"].empty and not st.session_state["rooms"].empt
     st.markdown("---")
     with st.expander("🧪 What-if: enforce a specific forced room (non-destructive)", expanded=False):
         fam_src = st.session_state["families"].copy()
-        # Normalize family column for labeling
         if "family" not in fam_src.columns:
             if "full_name" in fam_src.columns:
                 fam_src["family"] = fam_src["full_name"].astype(str).str.strip()
@@ -310,7 +390,6 @@ if not st.session_state["families"].empty and not st.session_state["rooms"].empt
         if fam_src.empty:
             st.info("Upload families.csv to run a what-if.")
         else:
-            # Build human-readable labels for each source row
             labels = []
             for i, r in fam_src.iterrows():
                 fam_name = str(r.get("family", "")).strip()
@@ -320,7 +399,11 @@ if not st.session_state["families"].empty and not st.session_state["rooms"].empt
                 fr = str(r.get("forced_room", "")).strip() if "forced_room" in fam_src.columns else ""
                 labels.append(f"{i}: {fam_name} | {rt} | {ci}→{co} | forced={fr or '-'}")
 
-            sel_row_idx = st.selectbox("Pick a source row to pin", list(fam_src.index), format_func=lambda i: labels[list(fam_src.index).index(i)])
+            sel_row_idx = st.selectbox(
+                "Pick a source row to pin",
+                list(fam_src.index),
+                format_func=lambda i: labels[list(fam_src.index).index(i)],
+            )
             sel_row = fam_src.loc[sel_row_idx]
 
             sel_rt = str(sel_row["room_type"]).strip()
@@ -338,8 +421,7 @@ if not st.session_state["families"].empty and not st.session_state["rooms"].empt
 
                 whatif_logs = []
                 def _wlog(msg):
-                    from datetime import datetime
-                    ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    ts = dt.now().strftime("%Y-%m-%d %H:%M:%S")
                     whatif_logs.append(f"[{ts}] {msg}")
 
                 new_assigned, new_unassigned = assign_rooms(fam_test, st.session_state["rooms"], log_func=_wlog)
@@ -357,7 +439,6 @@ if not st.session_state["families"].empty and not st.session_state["rooms"].empt
                 else:
                     st.error(f"{len(new_unassigned)} row(s) remained unassigned in this scenario.")
 
-                # Show only the affected family's before/after if present in assigned
                 fam_name = str(sel_row.get("family", "")).strip()
                 st.markdown("#### Before vs After (selected family)")
                 before = st.session_state["assigned"]
