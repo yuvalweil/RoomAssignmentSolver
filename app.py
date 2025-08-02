@@ -1,7 +1,8 @@
+# app.py — Home page
 import streamlit as st
 
-# (optional) ensure local packages are importable even if CWD changes
-import sys, os
+# Ensure local packages are importable (works when running pages/* too)
+import sys
 from pathlib import Path
 ROOT = Path(__file__).resolve().parent
 if str(ROOT) not in sys.path:
@@ -20,16 +21,33 @@ from ui.sections import (
 st.set_page_config(page_title="Room Assignment", layout="wide")
 st.title("🏕️ Room Assignment System")
 
-# init session keys
+# Sidebar navigation (explicit links to pages)
+with st.sidebar:
+    st.header("Navigation")
+    st.page_link("app.py", label="🏠 Home")
+    st.page_link("pages/01_Assigned_All.py", label="✅ Assigned Families (All)")
+    st.page_link("pages/99_Assignment_Log.py", label="🐞 Assignment Log")
+
+    # Optional quick status
+    st.markdown("---")
+    ensure_session_keys()  # safe to call here too
+    assigned = st.session_state.get("assigned")
+    unassigned = st.session_state.get("unassigned")
+    st.caption(
+        f"Assigned rows: **{0 if assigned is None or assigned.empty else len(assigned)}**"
+        + f"\n\nUnassigned rows: **{0 if unassigned is None or unassigned.empty else len(unassigned)}**"
+    )
+
+# Initialize session state (main page flow)
 ensure_session_keys()
 
-# Uploads (reads CSVs + auto-run if both present)
+# Uploads (reads CSVs + autorun assignment when both CSVs present)
 render_uploads()
 
-# Recalculate button
+# Manual recalc
 render_recalc_button()
 
-# Keep these sections on Home
+# Main sections on Home
 render_date_or_range_view()
 render_manual_override()
 render_diagnostics()
