@@ -1,6 +1,6 @@
 import streamlit as st
 import pandas as pd
-from datetime import datetime
+from datetime import datetime as dt, time
 from logic import assign_rooms
 
 st.set_page_config(page_title="Room Assignment", layout="wide")
@@ -57,8 +57,11 @@ if "assigned" in st.session_state:
     df["check_in_dt"] = pd.to_datetime(df["check_in"], format="%d/%m/%Y")
     df["check_out_dt"] = pd.to_datetime(df["check_out"], format="%d/%m/%Y")
 
+    # Convert selected date to datetime for comparison
+    selected_datetime = dt.combine(selected_date, time.min)
+
     # Filter rows where selected date falls within check-in/check-out
-    filtered_df = df[(selected_date >= df["check_in_dt"]) & (selected_date < df["check_out_dt"])]
+    filtered_df = df[(selected_datetime >= df["check_in_dt"]) & (selected_datetime < df["check_out_dt"])]
 
     if not filtered_df.empty:
         st.success(f"✅ {len(filtered_df)} assignments found on {selected_date.strftime('%d/%m/%Y')}")
