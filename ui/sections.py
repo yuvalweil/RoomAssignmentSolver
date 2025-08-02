@@ -10,8 +10,8 @@ from .helpers import (
     family_filters_ui,
     roomtype_filters_ui,
     apply_filters,
-    build_day_sheet_sections,   # if you use the printable sheet
-    daily_sheet_html,           # if you use the printable sheet
+    build_day_sheet_sections,   # <-- add
+    daily_sheet_html,           # <-- add
 )
 from .runner import run_assignment
 from logic import rebuild_calendar_from_assignments, validate_constraints, explain_soft_constraints
@@ -334,3 +334,47 @@ def render_logs():
 
     log_bytes = "\n".join(st.session_state["log_lines"]).encode("utf-8-sig")
     st.download_button("📥 Download Log", log_bytes, file_name="assignment.log", mime="text/plain")
+
+def render_daily_operations_sheet():
+    """Printable daily sheet + download as a single HTML file."""
+    import pandas as pd
+    from datetime import datetime as _dt, time as _time
+
+    st.markdown("---")
+    st.markdown("## 🗂️ Daily Operations Sheet (Printable)")
+
+    assigned = st.session_state.get("assigned")
+    if assigned is None or assigned.empty:
+        st.info("No assignments yet. Upload & run first.")
+        return
+
+    on_date = st.date_input("Select date", format="DD/MM/YYYY")
+    include_empty = st.checkbox(
+        "Show empty units",
+        value=True,
+        help="Include rooms/campsites with no booking for visual consistency.",
+    )
+    on_dt = _dt.combine(on_date, _time.min)
+
+    families_df = st.session_state.get("families", pd.DataFrame())
+    rooms_df    = st.session_state.get("rooms", pd.DataFrame())
+
+    sections = build_day_sheet_sections(assigned, families_df, rooms_df, on_dt, include_empty)
+
+    # Lightweight preview
+    for sec, rows in sections.items():
+        st.subheader(sec)
+        if rows:
+            df = pd.DataFrame(rows, columns=["room","family","people","nights","breakfast","notes"])
+            st.dataframe(df, use_container_width=True)
+        else:
+            st.caption("— אין נתונים —")
+
+    # Download as single HTML
+    html_str = daily_sheet_html(sections, on_dt)
+    st.download_button(
+        "📥 Download printable HTML",
+        data=html_str.encode("utf-8"),
+        file_name=f"daily_sheet_{on_date.strftime('%Y-%m-%d')}.html",
+        mime="text/html",
+    )
