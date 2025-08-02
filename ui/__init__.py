@@ -1,6 +1,6 @@
-# ui/__init__.py
-"""
-UI package for the Streamlit app.
-Keeps the package importable; we import concrete functions from submodules.
-"""
-__all__ = []  # we don't re-export anything from here on purpose
+# logic/__init__.py
+from .core import assign_rooms
+from .validate import validate_constraints
+from .calendar_store import rebuild_calendar_from_assignments
+from .diagnostics import explain_soft_constraints
+__all__ = ["assign_rooms","validate_constraints","rebuild_calendar_from_assignments","explain_soft_constraints"]
