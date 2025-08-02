@@ -28,10 +28,12 @@ def assign_rooms(families_df, rooms_df, log_func=None):
     unassigned = []
 
     rooms_by_type = rooms_df.groupby("room_type")["room"].apply(lambda x: sorted(x)).to_dict()
-    family_groups = families_df.groupby(families_df["full_name" if "full_name" in families_df.columns else "שם מלא"])
+
+    family_col = "full_name" if "full_name" in families_df.columns else "שם מלא"
+    family_groups = families_df.groupby(families_df[family_col])
 
     forced_families = families_df[families_df["forced_room"].notna()]
-    forced_family_names = forced_families["full_name"].unique().tolist()
+    forced_family_names = forced_families[family_col].unique().tolist()
 
     all_processed = set()
 
@@ -43,6 +45,7 @@ def assign_rooms(families_df, rooms_df, log_func=None):
         nonlocal assigned, unassigned
         log(f"🔍 Processing {family}")
         for room_type, orders in group.groupby("room_type"):
+            orders = orders.sort_values(by="check_in")
             available_rooms = [r for r in rooms_by_type.get(room_type, []) if all(
                 is_available(r, row["check_in"], row["check_out"]) for _, row in orders.iterrows()
             )]
