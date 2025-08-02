@@ -611,12 +611,10 @@ def explain_soft_constraints(
         # Find the assigned row corresponding to this source row (same family/type/dates)
         mask = (
             (assigned_df["family"].astype(str).str.strip() == fml) &
-            (assigned_df["room_type"].astype(str).stripped := assigned_df["room_type"].astype(str).str.strip()) &  # noqa
             (assigned_df["room_type"].astype(str).str.strip() == rt) &
             (assigned_df["check_in"].astype(str).str.strip() == ci) &
             (assigned_df["check_out"].astype(str).str.strip() == co)
         )
-        # The ":= …" line above is a harmless no-op to avoid multiple casts when stepping through; kept for readability.
 
         if not mask.any():
             results.append({
