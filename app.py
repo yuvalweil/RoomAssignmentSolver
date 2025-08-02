@@ -1,19 +1,25 @@
 import streamlit as st
 import pandas as pd
 from datetime import datetime as dt, time
-from logic import assign_rooms, validate_constraints, rebuild_calendar_from_assignments
+
+from logic import (
+    assign_rooms,
+    validate_constraints,
+    rebuild_calendar_from_assignments,
+    explain_soft_constraints,  # NEW
+)
 
 st.set_page_config(page_title="Room Assignment", layout="wide")
 st.title("🏕️ Room Assignment System")
 
 # --- Helpers -----------------------------------------------------------------
 def _read_csv(file):
-    # UTF-8 with BOM handles Hebrew headers well; fallback to default if needed
+    # UTF-8 with BOM handles Hebrew headers; keep_default_na/na_filter stop blanks becoming "nan"
     try:
-        return pd.read_csv(file, encoding="utf-8-sig")
+        return pd.read_csv(file, encoding="utf-8-sig", keep_default_na=False, na_filter=False)
     except Exception:
         file.seek(0)
-        return pd.read_csv(file)
+        return pd.read_csv(file, keep_default_na=False, na_filter=False)
 
 def _ensure_session_keys():
     for k, v in [
@@ -63,13 +69,10 @@ def run_assignment():
 # Ensure we always have datetime columns, even for empty DataFrames
 def with_dt_cols(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
-    # If frame is empty, create empty datetime columns to prevent KeyError on selection
     if df.empty:
         df["check_in_dt"] = pd.to_datetime(pd.Series([], dtype="datetime64[ns]"))
         df["check_out_dt"] = pd.to_datetime(pd.Series([], dtype="datetime64[ns]"))
         return df
-
-    # If textual dates exist, parse them; otherwise create NaT columns
     if "check_in" in df.columns:
         df["check_in_dt"] = pd.to_datetime(df["check_in"], format="%d/%m/%Y", errors="coerce")
     else:
@@ -79,6 +82,12 @@ def with_dt_cols(df: pd.DataFrame) -> pd.DataFrame:
     else:
         df["check_out_dt"] = pd.to_datetime(pd.Series([pd.NaT] * len(df)))
     return df
+
+def _is_empty_opt(val):
+    if pd.isna(val):
+        return True
+    s = str(val).strip().lower()
+    return s in {"", "nan", "none", "null"}
 
 # --- Upload section ----------------------------------------------------------
 st.markdown("### 📁 Upload Guest & Room Lists")
@@ -90,7 +99,7 @@ with upload_col1:
 
 with upload_col2:
     room_file = st.file_uploader("🏠 Rooms CSV", type="csv", label_visibility="collapsed")
-    st.markdown("*🏠 Rooms*", help="Upload your rooms.csv (room numbers may repeat across types).")
+    st.markdown("*🏠 Rooms*", help="Upload your rooms.csv (room numbers may repeat across room types).")
 
 if fam_file:
     st.session_state["families"] = _read_csv(fam_file)
@@ -112,9 +121,7 @@ if not st.session_state["families"].empty and not st.session_state["rooms"].empt
 
 # --- Styling helper ----------------------------------------------------------
 def highlight_forced(row):
-    if pd.notna(row.get("forced_room")) and str(row["forced_room"]).strip():
-        return ["background-color: #fff9c4"] * len(row)
-    return [""] * len(row)
+    return ["background-color: #fff9c4"] * len(row) if not _is_empty_opt(row.get("forced_room", "")) else [""] * len(row)
 
 # --- Assignment Overview -----------------------------------------------------
 st.markdown("## 📋 Full Assignment Overview")
@@ -227,12 +234,11 @@ else:
 if not st.session_state["assigned"].empty:
     st.markdown("---")
     with st.expander("🛠️ Manual assignment override (with validation)", expanded=False):
-        assigned = st.session_state["assigned"].copy()
-        families = sorted(assigned["family"].unique())
+        assigned_tbl = st.session_state["assigned"].copy()
+        families = sorted(assigned_tbl["family"].unique())
         sel_family = st.selectbox("Family", families)
 
-        fam_rows = assigned[assigned["family"] == sel_family].reset_index(drop=True)
-        # make a concise label for selection
+        fam_rows = assigned_tbl[assigned_tbl["family"] == sel_family].reset_index(drop=True)
         row_labels = [
             f"{i}: {r['room_type']} | {r['check_in']}→{r['check_out']} | current room: {r['room']}"
             for i, r in fam_rows.iterrows()
@@ -262,21 +268,3 @@ if not st.session_state["assigned"].empty:
                 st.session_state["assigned"].loc[
                     st.session_state["assigned"].query("family == @sel_family").index[sel_idx], "room"
                 ] = fam_rows.loc[sel_idx, "room"]
-            else:
-                st.success("✅ Change applied. No hard violations.")
-                if soft_violations:
-                    st.warning("Some soft constraints are not satisfied:")
-                    for s in soft_violations:
-                        st.write(f"• {s}")
-
-# --- Logs: compact view + download ------------------------------------------
-if st.session_state.get("log_lines"):
-    st.markdown("---")
-    st.markdown("### 🐞 Assignment Log")
-
-    n = st.slider("Show last N lines", min_value=20, max_value=1000, value=200, step=20)
-    tail = st.session_state["log_lines"][-n:]
-    st.text_area("Log (compact)", value="\n".join(tail), height=200, label_visibility="collapsed")
-
-    log_bytes = "\n".join(st.session_state["log_lines"]).encode("utf-8-sig")
-    st.download_button("📥 Download Log", log_bytes, file_name="assignment.log", mime="text/plain")
