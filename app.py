@@ -6,8 +6,8 @@ from logic import assign_rooms
 st.set_page_config(page_title="Room Assignment", layout="wide")
 st.title("🏕️ Room Assignment System")
 
+# Upload section
 st.markdown("### 📁 Upload Guest & Room Lists")
-
 upload_col1, upload_col2 = st.columns(2)
 
 with upload_col1:
@@ -24,6 +24,7 @@ if fam_file:
 if room_file:
     st.session_state["rooms"] = pd.read_csv(room_file)
 
+# Run assignment logic
 def run_assignment():
     try:
         assigned_df, unassigned_df = assign_rooms(
@@ -43,8 +44,8 @@ if "families" in st.session_state and "rooms" in st.session_state:
     if st.button("🔁 Recalculate Assignment"):
         run_assignment()
 
+# Show full assignments
 st.markdown("## 📋 Full Assignment Overview")
-
 col1, col2 = st.columns(2)
 
 with col1:
@@ -59,77 +60,81 @@ with col2:
         st.subheader("⚠️ Unassigned Families (All)")
         st.dataframe(st.session_state["unassigned"], use_container_width=True)
 
+# Toggle between range/single view
 st.markdown("---")
 st.markdown("## 📅 View Assignments for Date or Range")
 
 if "range_mode" not in st.session_state:
     st.session_state["range_mode"] = False
 
-with st.container():
-    st.markdown("### 🔄 Choose View Mode")
-    toggle_label = "🔄 Switch to Range View" if not st.session_state["range_mode"] else "🔄 Switch to Single Date View"
-    if st.button(toggle_label, key="toggle_button"):
-        st.session_state["range_mode"] = not st.session_state["range_mode"]
+toggle_label = "🔄 Switch to Range View" if not st.session_state["range_mode"] else "🔄 Switch to Single Date View"
+if st.button(toggle_label, key="toggle_button"):
+    st.session_state["range_mode"] = not st.session_state["range_mode"]
 
+# Get data
 assigned_df = st.session_state.get("assigned", pd.DataFrame())
 unassigned_df = st.session_state.get("unassigned", pd.DataFrame())
 
-if not assigned_df.empty and not unassigned_df.empty:
+# Parse dates
+if not assigned_df.empty:
     assigned_df["check_in_dt"] = pd.to_datetime(assigned_df["check_in"], format="%d/%m/%Y")
     assigned_df["check_out_dt"] = pd.to_datetime(assigned_df["check_out"], format="%d/%m/%Y")
+
+if not unassigned_df.empty:
     unassigned_df["check_in_dt"] = pd.to_datetime(unassigned_df["check_in"], format="%d/%m/%Y")
     unassigned_df["check_out_dt"] = pd.to_datetime(unassigned_df["check_out"], format="%d/%m/%Y")
 
-    if st.session_state["range_mode"]:
-        col1, col2 = st.columns(2)
-        with col1:
-            start_date = st.date_input("Start Date", format="DD/MM/YYYY", key="start_date")
-        with col2:
-            end_date = st.date_input("End Date", format="DD/MM/YYYY", key="end_date")
+# Filter by selected date or range
+if st.session_state["range_mode"]:
+    col1, col2 = st.columns(2)
+    with col1:
+        start_date = st.date_input("Start Date", format="DD/MM/YYYY", key="start_date")
+    with col2:
+        end_date = st.date_input("End Date", format="DD/MM/YYYY", key="end_date")
 
-        if start_date > end_date:
-            st.warning("⚠️ End date must be after start date.")
-        else:
-            start_dt = dt.combine(start_date, time.min)
-            end_dt = dt.combine(end_date, time.max)
-
-            assigned_filtered = assigned_df[
-                (assigned_df["check_in_dt"] < end_dt) & (assigned_df["check_out_dt"] > start_dt)
-            ]
-            unassigned_filtered = unassigned_df[
-                (unassigned_df["check_in_dt"] < end_dt) & (unassigned_df["check_out_dt"] > start_dt)
-            ]
-
-            st.subheader(f"✅ Assigned Families from {start_date.strftime('%d/%m/%Y')} to {end_date.strftime('%d/%m/%Y')}")
-            if not assigned_filtered.empty:
-                st.dataframe(assigned_filtered[["family", "room", "room_type", "check_in", "check_out"]], use_container_width=True)
-            else:
-                st.info("📭 No assigned families in that range.")
-
-            st.subheader(f"⚠️ Unassigned Families from {start_date.strftime('%d/%m/%Y')} to {end_date.strftime('%d/%m/%Y')}")
-            if not unassigned_filtered.empty:
-                st.dataframe(unassigned_filtered[["id", "people", "check_in", "check_out", "room_type"]], use_container_width=True)
-            else:
-                st.info("📭 No unassigned families in that range.")
+    if start_date > end_date:
+        st.warning("⚠️ End date must be after start date.")
     else:
-        selected_date = st.date_input("Select a date", format="DD/MM/YYYY", key="single_date")
-        selected_dt = dt.combine(selected_date, time.min)
+        start_dt = dt.combine(start_date, time.min)
+        end_dt = dt.combine(end_date, time.max)
 
         assigned_filtered = assigned_df[
-            (assigned_df["check_in_dt"] <= selected_dt) & (assigned_df["check_out_dt"] > selected_dt)
+            (assigned_df["check_in_dt"] < end_dt) & (assigned_df["check_out_dt"] > start_dt)
         ]
         unassigned_filtered = unassigned_df[
-            (unassigned_df["check_in_dt"] <= selected_dt) & (unassigned_df["check_out_dt"] > selected_dt)
+            (unassigned_df["check_in_dt"] < end_dt) & (unassigned_df["check_out_dt"] > start_dt)
         ]
 
-        st.subheader(f"✅ Assigned Families on {selected_date.strftime('%d/%m/%Y')}")
+        st.subheader(f"✅ Assigned Families from {start_date.strftime('%d/%m/%Y')} to {end_date.strftime('%d/%m/%Y')}")
         if not assigned_filtered.empty:
             st.dataframe(assigned_filtered[["family", "room", "room_type", "check_in", "check_out"]], use_container_width=True)
         else:
-            st.info("📭 No assigned families on that date.")
+            st.info("📭 No assigned families in that range.")
 
-        st.subheader(f"⚠️ Unassigned Families on {selected_date.strftime('%d/%m/%Y')}")
+        st.subheader(f"⚠️ Unassigned Families from {start_date.strftime('%d/%m/%Y')} to {end_date.strftime('%d/%m/%Y')}")
         if not unassigned_filtered.empty:
             st.dataframe(unassigned_filtered[["id", "people", "check_in", "check_out", "room_type"]], use_container_width=True)
         else:
-            st.info("📭 No unassigned families on that date.")
+            st.info("📭 No unassigned families in that range.")
+else:
+    selected_date = st.date_input("Select a date", format="DD/MM/YYYY", key="single_date")
+    selected_dt = dt.combine(selected_date, time.min)
+
+    assigned_filtered = assigned_df[
+        (assigned_df["check_in_dt"] <= selected_dt) & (assigned_df["check_out_dt"] > selected_dt)
+    ]
+    unassigned_filtered = unassigned_df[
+        (unassigned_df["check_in_dt"] <= selected_dt) & (unassigned_df["check_out_dt"] > selected_dt)
+    ]
+
+    st.subheader(f"✅ Assigned Families on {selected_date.strftime('%d/%m/%Y')}")
+    if not assigned_filtered.empty:
+        st.dataframe(assigned_filtered[["family", "room", "room_type", "check_in", "check_out"]], use_container_width=True)
+    else:
+        st.info("📭 No assigned families on that date.")
+
+    st.subheader(f"⚠️ Unassigned Families on {selected_date.strftime('%d/%m/%Y')}")
+    if not unassigned_filtered.empty:
+        st.dataframe(unassigned_filtered[["id", "people", "check_in", "check_out", "room_type"]], use_container_width=True)
+    else:
+        st.info("📭 No unassigned families on that date.")
