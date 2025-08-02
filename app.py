@@ -114,13 +114,13 @@ if st.session_state["range_mode"]:
 
         st.subheader(f"✅ Assigned Families from {start_date.strftime('%d/%m/%Y')} to {end_date.strftime('%d/%m/%Y')}")
         if not assigned_filtered.empty:
-            st.dataframe(assigned_filtered[["family", "room", "room_type", "check_in", "check_out"]], use_container_width=True)
+            st.dataframe(assigned_filtered[["family", "room", "room_type", "check_in", "check_out", "forced_room"]], use_container_width=True)
         else:
             st.info("📭 No assigned families in that range.")
 
         st.subheader(f"⚠️ Unassigned Families from {start_date.strftime('%d/%m/%Y')} to {end_date.strftime('%d/%m/%Y')}")
         if not unassigned_filtered.empty:
-            st.dataframe(unassigned_filtered.drop(columns=["id"], errors="ignore")[["people", "check_in", "check_out", "room_type"]], use_container_width=True)
+            st.dataframe(unassigned_filtered.drop(columns=["id"], errors="ignore")[["people", "check_in", "check_out", "room_type", "forced_room"]], use_container_width=True)
         else:
             st.info("📭 No unassigned families in that range.")
 else:
@@ -136,12 +136,12 @@ else:
 
     st.subheader(f"✅ Assigned Families on {selected_date.strftime('%d/%m/%Y')}")
     if not assigned_filtered.empty:
-        st.dataframe(assigned_filtered[["family", "room", "room_type", "check_in", "check_out"]], use_container_width=True)
+        st.dataframe(assigned_filtered[["family", "room", "room_type", "check_in", "check_out", "forced_room"]], use_container_width=True)
     else:
         st.info("📭 No assigned families on that date.")
 
     st.subheader(f"⚠️ Unassigned Families on {selected_date.strftime('%d/%m/%Y')}")
     if not unassigned_filtered.empty:
-        st.dataframe(unassigned_filtered.drop(columns=["id"], errors="ignore")[["people", "check_in", "check_out", "room_type"]], use_container_width=True)
+        st.dataframe(unassigned_filtered.drop(columns=["id"], errors="ignore")[["people", "check_in", "check_out", "room_type", "forced_room"]], use_container_width=True)
     else:
         st.info("📭 No unassigned families on that date.")
