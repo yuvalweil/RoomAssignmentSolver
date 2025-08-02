@@ -10,7 +10,7 @@ from .helpers import (
     family_filters_ui,
     roomtype_filters_ui,
     apply_filters,
-    build_day_sheet_sections,   # printable sheet data
+    build_day_sheet_sections,   # printable sheet data (now uses only families+rooms; assignment optional)
     daily_sheet_html,           # printable sheet HTML
 )
 from .runner import run_assignment
@@ -174,15 +174,16 @@ def render_date_or_range_view():
             st.info("📭 No unassigned families on that date.")
 
 
-# ---------- Daily Operations Sheet (Printable) -------------------------------
+# ---------- Daily Operations Sheet (Printable, inputs-only) ------------------
 def render_daily_operations_sheet():
-    """Printable daily sheet + download as a single HTML file with your desired columns."""
+    """Printable daily sheet using ONLY families.csv + rooms.csv (assignment optional)."""
     st.markdown("---")
     st.markdown("## 🗂️ Daily Operations Sheet (Printable)")
 
-    assigned = st.session_state.get("assigned")
-    if assigned is None or assigned.empty:
-        st.info("No assignments yet. Upload & run first.")
+    families_df = st.session_state.get("families", pd.DataFrame())
+    rooms_df    = st.session_state.get("rooms", pd.DataFrame())
+    if families_df.empty or rooms_df.empty:
+        st.info("Upload both families.csv and rooms.csv to generate the sheet.")
         return
 
     on_date = st.date_input("Select date", format="DD/MM/YYYY")
@@ -193,12 +194,12 @@ def render_daily_operations_sheet():
     )
     on_dt = dt.combine(on_date, time.min)
 
-    families_df = st.session_state.get("families", pd.DataFrame())
-    rooms_df    = st.session_state.get("rooms", pd.DataFrame())
+    # If an assignment exists, it is derived from the two inputs—safe to use.
+    assigned_df = st.session_state.get("assigned", pd.DataFrame())
 
-    sections = build_day_sheet_sections(assigned, families_df, rooms_df, on_dt, include_empty)
+    sections = build_day_sheet_sections(assigned_df, families_df, rooms_df, on_dt, include_empty)
 
-    # Preview in the app, with the exact columns & order:
+    # Preview with final headers
     preview_cols = ["unit","name","people","nights","extra","breakfast","paid","charge","notes"]
     preview_headers = ["יחידה","שם","אנשים","לילות","תוספת","א.בוקר","שולם","לחיוב","הערות"]
 
@@ -211,7 +212,7 @@ def render_daily_operations_sheet():
         else:
             st.caption("— אין נתונים —")
 
-    # Download as single HTML with your header order
+    # Download as single HTML
     html_str = daily_sheet_html(sections, on_dt)
     st.download_button(
         "📥 Download printable HTML",
