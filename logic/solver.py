@@ -238,8 +238,19 @@ def assign_rooms(
 
     return pd.DataFrame(assigned_rows), pd.DataFrame(unassigned_rows)
 
-# Keep backward compatibility with your core.py that imports assign_per_type
-def assign_per_type(families_df: pd.DataFrame, rooms_df: pd.DataFrame, log_func=None):
+# Keep backward compatibility with older core.py call-sites
+def assign_per_type(families_df, rooms_df, *args, **kwargs):
+    """
+    Legacy wrapper. Old callers sometimes pass extra positional args
+    (e.g., capacity tables, options, or a log function). We ignore any
+    non-callable extras and forward the logger to assign_rooms.
+    """
+    log_func = kwargs.get("log_func", None)
+    # If any positional arg is callable, treat the last callable as log_func
+    for a in reversed(args):
+        if callable(a):
+            log_func = a
+            break
     return assign_rooms(families_df, rooms_df, log_func=log_func)
 
 # --- Backtracking search -----------------------------------------------------
