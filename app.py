@@ -58,7 +58,8 @@ with col1:
 with col2:
     if "unassigned" in st.session_state and not st.session_state["unassigned"].empty:
         st.subheader("⚠️ Unassigned Families (All)")
-        st.dataframe(st.session_state["unassigned"], use_container_width=True)
+        unassigned_display = st.session_state["unassigned"].drop(columns=["id"], errors="ignore")
+        st.dataframe(unassigned_display, use_container_width=True)
 
 # Toggle between range/single view
 st.markdown("---")
@@ -75,7 +76,7 @@ if st.button(toggle_label, key="toggle_button"):
 assigned_df = st.session_state.get("assigned", pd.DataFrame())
 unassigned_df = st.session_state.get("unassigned", pd.DataFrame())
 
-# ✅ Ensure date columns always exist
+# Ensure date columns always exist
 if not assigned_df.empty and "check_in" in assigned_df.columns:
     assigned_df["check_in_dt"] = pd.to_datetime(assigned_df["check_in"], format="%d/%m/%Y", errors="coerce")
     assigned_df["check_out_dt"] = pd.to_datetime(assigned_df["check_out"], format="%d/%m/%Y", errors="coerce")
@@ -119,7 +120,7 @@ if st.session_state["range_mode"]:
 
         st.subheader(f"⚠️ Unassigned Families from {start_date.strftime('%d/%m/%Y')} to {end_date.strftime('%d/%m/%Y')}")
         if not unassigned_filtered.empty:
-            st.dataframe(unassigned_filtered[["id", "people", "check_in", "check_out", "room_type"]], use_container_width=True)
+            st.dataframe(unassigned_filtered.drop(columns=["id"], errors="ignore")[["people", "check_in", "check_out", "room_type"]], use_container_width=True)
         else:
             st.info("📭 No unassigned families in that range.")
 else:
@@ -141,6 +142,6 @@ else:
 
     st.subheader(f"⚠️ Unassigned Families on {selected_date.strftime('%d/%m/%Y')}")
     if not unassigned_filtered.empty:
-        st.dataframe(unassigned_filtered[["id", "people", "check_in", "check_out", "room_type"]], use_container_width=True)
+        st.dataframe(unassigned_filtered.drop(columns=["id"], errors="ignore")[["people", "check_in", "check_out", "room_type"]], use_container_width=True)
     else:
         st.info("📭 No unassigned families on that date.")
