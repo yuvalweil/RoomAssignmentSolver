@@ -71,23 +71,47 @@ with col2:
         st.dataframe(st.session_state["unassigned"], use_container_width=True)
 
 # ========================
-# SECTION 2: Filter by Date
+# SECTION 2: Filter by Date Range
 # ========================
 st.markdown("---")
-st.markdown("## 📅 View Assignments for Specific Date")
+st.markdown("## 📅 View Assignments and Unassigned for Date Range")
 
-if "assigned" in st.session_state:
-    selected_date = st.date_input("Select a date", format="DD/MM/YYYY")
+if "assigned" in st.session_state and "unassigned" in st.session_state:
 
-    df = st.session_state["assigned"].copy()
-    df["check_in_dt"] = pd.to_datetime(df["check_in"], format="%d/%m/%Y")
-    df["check_out_dt"] = pd.to_datetime(df["check_out"], format="%d/%m/%Y")
-    selected_datetime = dt.combine(selected_date, time.min)
+    date_col1, date_col2 = st.columns(2)
+    with date_col1:
+        start_date = st.date_input("📅 Start Date", format="DD/MM/YYYY", key="start_date")
+    with date_col2:
+        end_date = st.date_input("📅 End Date", format="DD/MM/YYYY", key="end_date")
 
-    filtered_df = df[(selected_datetime >= df["check_in_dt"]) & (selected_datetime < df["check_out_dt"])]
-
-    if not filtered_df.empty:
-        st.success(f"✅ {len(filtered_df)} assignments found on {selected_date.strftime('%d/%m/%Y')}")
-        st.dataframe(filtered_df[["family", "room", "check_in", "check_out"]], use_container_width=True)
+    if start_date > end_date:
+        st.warning("⚠️ End date must be after start date.")
     else:
-        st.info("📭 No assignments for that date.")
+        start_dt = dt.combine(start_date, time.min)
+        end_dt = dt.combine(end_date, time.max)
+
+        # Filter assigned
+        assigned_df = st.session_state["assigned"].copy()
+        assigned_df["check_in_dt"] = pd.to_datetime(assigned_df["check_in"], format="%d/%m/%Y")
+        assigned_df["check_out_dt"] = pd.to_datetime(assigned_df["check_out"], format="%d/%m/%Y")
+
+        assigned_filtered = assigned_df[
+            (assigned_df["check_in_dt"] < end_dt) & (assigned_df["check_out_dt"] > start_dt)
+        ]
+
+        # Filter unassigned
+        unassigned_df = st.session_state["unassigned"].copy()
+        if not unassigned_df.empty:
+            unassigned_df["check_in_dt"] = pd.to_datetime(unassigned_df["check_in"], format="%d/%m/%Y")
+            unassigned_df["check_out_dt"] = pd.to_datetime(unassigned_df["check_out"], format="%d/%m/%Y")
+
+            unassigned_filtered = unassigned_df[
+                (unassigned_df["check_in_dt"] < end_dt) & (unassigned_df["check_out_dt"] > start_dt)
+            ]
+        else:
+            unassigned_filtered = pd.DataFrame()
+
+        # Show results
+        st.subheader(f"✅ Assigned Families from {start_date.strftime('%d/%m/%Y')} to {end_date.strftime('%d/%m/%Y')}")
+        if not assigned_filtered.empty:
+            st.da
