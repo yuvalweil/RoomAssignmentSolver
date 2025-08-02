@@ -10,17 +10,19 @@ from .helpers import (
     family_filters_ui,
     roomtype_filters_ui,
     apply_filters,
-    build_day_sheet_sections,   # <-- add
-    daily_sheet_html,           # <-- add
+    build_day_sheet_sections,   # for printable daily sheet
+    daily_sheet_html,           # for printable daily sheet
 )
 from .runner import run_assignment
 from logic import rebuild_calendar_from_assignments, validate_constraints, explain_soft_constraints
+
 
 # ---------- Recalculate button ----------------------------------------------
 def render_recalc_button():
     if not st.session_state["families"].empty and not st.session_state["rooms"].empty:
         if st.button("🔁 Recalculate Assignment"):
             run_assignment()
+
 
 # ---------- Assignment Overview (All) ---------------------------------------
 def render_assigned_overview():
@@ -32,15 +34,21 @@ def render_assigned_overview():
             st.subheader("✅ Assigned Families (All)")
             all_families = unique_values(st.session_state["assigned"], "family")
             all_types    = unique_values(st.session_state["assigned"], "room_type")
+
             fam_sel_all, fam_q_all = family_filters_ui(all_families, key_prefix="all")
             rt_sel_all,  rt_q_all  = roomtype_filters_ui(all_types,   key_prefix="all")
+
             assigned_all_view = apply_filters(
-                st.session_state["assigned"], fam_sel_all, fam_q_all, rt_sel_all, rt_q_all
+                st.session_state["assigned"],
+                fam_sel_all, fam_q_all,
+                rt_sel_all,  rt_q_all,
             )
+
             if not assigned_all_view.empty:
                 st.write(assigned_all_view.style.apply(highlight_forced, axis=1))
             else:
                 st.info("📭 No rows match the current filters.")
+
             csv = assigned_all_view.to_csv(index=False).encode("utf-8-sig")
             st.download_button("📥 Download Assigned", csv, "assigned_families.csv", "text/csv")
 
@@ -53,6 +61,7 @@ def render_assigned_overview():
             )
             csv_un = st.session_state["unassigned"].to_csv(index=False).encode("utf-8-sig")
             st.download_button("📥 Download Unassigned", csv_un, "unassigned_families.csv", "text/csv")
+
 
 # ---------- Date or Range View ----------------------------------------------
 def render_date_or_range_view():
@@ -97,7 +106,9 @@ def render_date_or_range_view():
         rt_sel_r,  rt_q_r  = roomtype_filters_ui(range_types, key_prefix="range")
 
         assigned_filtered = apply_filters(
-            assigned_filtered, fam_sel_r, fam_q_r, rt_sel_r, rt_q_r
+            assigned_filtered,
+            fam_sel_r, fam_q_r,
+            rt_sel_r,  rt_q_r,
         )
 
         st.subheader(f"✅ Assigned Families from {start_date.strftime('%d/%m/%Y')} to {end_date.strftime('%d/%m/%Y')}")
@@ -137,7 +148,9 @@ def render_date_or_range_view():
         rt_sel_d,  rt_q_d  = roomtype_filters_ui(date_types, key_prefix="date")
 
         assigned_filtered = apply_filters(
-            assigned_filtered, fam_sel_d, fam_q_d, rt_sel_d, rt_q_d
+            assigned_filtered,
+            fam_sel_d, fam_q_d,
+            rt_sel_d,  rt_q_d,
         )
 
         st.subheader(f"✅ Assigned Families on {selected_date.strftime('%d/%m/%Y')}")
@@ -159,6 +172,50 @@ def render_date_or_range_view():
             )
         else:
             st.info("📭 No unassigned families on that date.")
+
+
+# ---------- Daily Operations Sheet (Printable) -------------------------------
+def render_daily_operations_sheet():
+    """Printable daily sheet + download as a single HTML file."""
+    st.markdown("---")
+    st.markdown("## 🗂️ Daily Operations Sheet (Printable)")
+
+    assigned = st.session_state.get("assigned")
+    if assigned is None or assigned.empty:
+        st.info("No assignments yet. Upload & run first.")
+        return
+
+    on_date = st.date_input("Select date", format="DD/MM/YYYY")
+    include_empty = st.checkbox(
+        "Show empty units",
+        value=True,
+        help="Include rooms/campsites with no booking for visual consistency.",
+    )
+    on_dt = dt.combine(on_date, time.min)
+
+    families_df = st.session_state.get("families", pd.DataFrame())
+    rooms_df    = st.session_state.get("rooms", pd.DataFrame())
+
+    sections = build_day_sheet_sections(assigned, families_df, rooms_df, on_dt, include_empty)
+
+    # Preview
+    for sec, rows in sections.items():
+        st.subheader(sec)
+        if rows:
+            df = pd.DataFrame(rows, columns=["room","family","people","nights","breakfast","notes"])
+            st.dataframe(df, use_container_width=True)
+        else:
+            st.caption("— אין נתונים —")
+
+    # Download HTML
+    html_str = daily_sheet_html(sections, on_dt)
+    st.download_button(
+        "📥 Download printable HTML",
+        data=html_str.encode("utf-8"),
+        file_name=f"daily_sheet_{on_date.strftime('%Y-%m-%d')}.html",
+        mime="text/html",
+    )
+
 
 # ---------- Manual override ---------------------------------------------------
 def render_manual_override():
@@ -208,6 +265,7 @@ def render_manual_override():
                     for s in soft_violations:
                         st.write(f"• {s}")
 
+
 # ---------- Diagnostics -------------------------------------------------------
 def render_diagnostics():
     if st.session_state.get("assigned", pd.DataFrame()).empty:
@@ -229,6 +287,7 @@ def render_diagnostics():
                 file_name="soft_constraints_report.csv",
                 mime="text/csv",
             )
+
 
 # ---------- What-if -----------------------------------------------------------
 def render_what_if():
@@ -277,7 +336,7 @@ def render_what_if():
                 fam_test["forced_room"] = ""
             fam_test.loc[sel_row_idx, "forced_room"] = str(chosen_room)
 
-            from logic import assign_rooms  # import here to avoid unnecessary imports on load
+            from logic import assign_rooms  # keep import local
             new_assigned, new_unassigned = assign_rooms(fam_test, st.session_state["rooms"], log_func=lambda m: None)
             hard_ok, soft_violations = validate_constraints(new_assigned)
 
@@ -321,6 +380,7 @@ def render_what_if():
                 mime="text/plain",
             )
 
+
 # ---------- Logs --------------------------------------------------------------
 def render_logs():
     if not st.session_state.get("log_lines"):
@@ -334,47 +394,3 @@ def render_logs():
 
     log_bytes = "\n".join(st.session_state["log_lines"]).encode("utf-8-sig")
     st.download_button("📥 Download Log", log_bytes, file_name="assignment.log", mime="text/plain")
-
-def render_daily_operations_sheet():
-    """Printable daily sheet + download as a single HTML file."""
-    import pandas as pd
-    from datetime import datetime as _dt, time as _time
-
-    st.markdown("---")
-    st.markdown("## 🗂️ Daily Operations Sheet (Printable)")
-
-    assigned = st.session_state.get("assigned")
-    if assigned is None or assigned.empty:
-        st.info("No assignments yet. Upload & run first.")
-        return
-
-    on_date = st.date_input("Select date", format="DD/MM/YYYY")
-    include_empty = st.checkbox(
-        "Show empty units",
-        value=True,
-        help="Include rooms/campsites with no booking for visual consistency.",
-    )
-    on_dt = _dt.combine(on_date, _time.min)
-
-    families_df = st.session_state.get("families", pd.DataFrame())
-    rooms_df    = st.session_state.get("rooms", pd.DataFrame())
-
-    sections = build_day_sheet_sections(assigned, families_df, rooms_df, on_dt, include_empty)
-
-    # Lightweight preview
-    for sec, rows in sections.items():
-        st.subheader(sec)
-        if rows:
-            df = pd.DataFrame(rows, columns=["room","family","people","nights","breakfast","notes"])
-            st.dataframe(df, use_container_width=True)
-        else:
-            st.caption("— אין נתונים —")
-
-    # Download as single HTML
-    html_str = daily_sheet_html(sections, on_dt)
-    st.download_button(
-        "📥 Download printable HTML",
-        data=html_str.encode("utf-8"),
-        file_name=f"daily_sheet_{on_date.strftime('%Y-%m-%d')}.html",
-        mime="text/html",
-    )
