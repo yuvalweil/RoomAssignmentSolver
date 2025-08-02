@@ -1,6 +1,6 @@
-# logic/__init__.py
-from .core import assign_rooms
-from .validate import validate_constraints
-from .calendar_store import rebuild_calendar_from_assignments
-from .diagnostics import explain_soft_constraints
-__all__ = ["assign_rooms","validate_constraints","rebuild_calendar_from_assignments","explain_soft_constraints"]
+# ui/__init__.py
+"""
+UI package for the Streamlit app.
+Do not import anything here to avoid side effects during submodule imports.
+"""
+__all__ = []
