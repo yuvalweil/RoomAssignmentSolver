@@ -1,55 +1,58 @@
 import pandas as pd
-from datetime import datetime
+from datetime import datetime as dt
 
-def is_available(bookings, check_in, check_out):
-    for b in bookings:
-        existing_check_in = b["check_in"]
-        existing_check_out = b["check_out"]
-        # Check for overlap
-        if not (check_out <= existing_check_in or check_in >= existing_check_out):
+# Tracks booked date ranges per room
+room_calendars = {}
+
+# Check if a room is available for the requested date range
+def is_available(room, check_in_str, check_out_str):
+    check_in = dt.strptime(check_in_str, "%d/%m/%Y")
+    check_out = dt.strptime(check_out_str, "%d/%m/%Y")
+
+    if room not in room_calendars:
+        room_calendars[room] = []
+
+    for (start, end) in room_calendars[room]:
+        # Overlapping range
+        if not (check_out <= start or check_in >= end):
             return False
+
+    # If available, reserve it
+    room_calendars[room].append((check_in, check_out))
     return True
 
+# Main assignment function
 def assign_rooms(families_df, rooms_df):
-    rooms = {
-        row["id"]: {
-            "type": row["type"],
-            "max_occupancy": row["max_occupancy"],
-            "bookings": []  # Track check-in/check-out dates
-        } for _, row in rooms_df.iterrows()
-    }
-
-    assignments = []
+    assigned = []
     unassigned = []
 
-    for _, fam in families_df.iterrows():
-        try:
-            check_in = datetime.strptime(fam["check_in"], "%d/%m/%Y")
-            check_out = datetime.strptime(fam["check_out"], "%d/%m/%Y")
-        except Exception:
-            unassigned.append(fam)
-            continue
+    # Map: room_type -> list of room names
+    rooms_by_type = rooms_df.groupby("room_type")["room"].apply(list).to_dict()
 
-        assigned = False
-        for room_id, room in rooms.items():
-            if (room["type"] == fam["room_type"] and
-                room["max_occupancy"] >= fam["people"] and
-                is_available(room["bookings"], check_in, check_out)):
+    for _, row in families_df.iterrows():
+        # Get info from row
+        family = row.get("שם מלא") or row.get("full_name") or row.get("family")
+        check_in = row["check_in"]
+        check_out = row["check_out"]
+        room_type = row["room_type"]
 
-                room["bookings"].append({"check_in": check_in, "check_out": check_out})
-                assignments.append({
-                    "family": fam["id"],
-                    "room": room_id,
-                    "check_in": fam["check_in"],    # keep original string format
-                    "check_out": fam["check_out"]
-                })
-                assigned = True
+        assigned_room = None
+
+        for room in rooms_by_type.get(room_type, []):
+            if is_available(room, check_in, check_out):
+                assigned_room = room
                 break
 
-        if not assigned:
-            unassigned.append(fam)
+        if assigned_room:
+            assigned.append({
+                "family": family,
+                "room": assigned_room,
+                "check_in": check_in,
+                "check_out": check_out
+            })
+        else:
+            unassigned.append(row.to_dict())
 
-    assigned_df = pd.DataFrame(assignments)
+    assigned_df = pd.DataFrame(assigned)
     unassigned_df = pd.DataFrame(unassigned)
-
     return assigned_df, unassigned_df
