@@ -1,11 +1,12 @@
 import streamlit as st
 import pandas as pd
 from datetime import datetime as dt, time
-from logic import assign_rooms, validate_constraints
+from logic import assign_rooms
 
 st.set_page_config(page_title="Room Assignment", layout="wide")
 st.title("🏕️ Room Assignment System")
 
+# Upload section
 st.markdown("### 📁 Upload Guest & Room Lists")
 upload_col1, upload_col2 = st.columns(2)
 
@@ -23,17 +24,23 @@ if fam_file:
 if room_file:
     st.session_state["rooms"] = pd.read_csv(room_file)
 
-log_buffer = []
+# Debug log collector
+def log_collector():
+    if "log_lines" not in st.session_state:
+        st.session_state["log_lines"] = []
+    def _log(msg):
+        st.session_state["log_lines"].append(msg)
+    return _log
 
-def log(msg):
-    log_buffer.append(msg)
-
+# Assignment logic
 def run_assignment():
     try:
+        st.session_state["log_lines"] = []
+        log_func = log_collector()
         assigned_df, unassigned_df = assign_rooms(
             st.session_state["families"],
             st.session_state["rooms"],
-            log_func=log
+            log_func=log_func
         )
         st.session_state["assigned"] = assigned_df
         st.session_state["unassigned"] = unassigned_df
@@ -41,18 +48,22 @@ def run_assignment():
     except Exception as e:
         st.error(f"❌ Assignment error: {e}")
 
+# Auto run on initial load
 if "assigned" not in st.session_state and "families" in st.session_state and "rooms" in st.session_state:
     run_assignment()
 
+# Recalculate button
 if "families" in st.session_state and "rooms" in st.session_state:
     if st.button("🔁 Recalculate Assignment"):
         run_assignment()
 
+# Highlight forced_room
 def highlight_forced(row):
     if pd.notna(row.get("forced_room")) and str(row["forced_room"]).strip():
         return ["background-color: #fff9c4"] * len(row)
     return [""] * len(row)
 
+# Assignment Overview
 st.markdown("## 📋 Full Assignment Overview")
 col1, col2 = st.columns(2)
 
@@ -67,9 +78,9 @@ with col1:
 with col2:
     if "unassigned" in st.session_state and not st.session_state["unassigned"].empty:
         st.subheader("⚠️ Unassigned Families (All)")
-        unassigned_display = st.session_state["unassigned"].drop(columns=["id"], errors="ignore")
-        st.dataframe(unassigned_display, use_container_width=True)
+        st.dataframe(st.session_state["unassigned"].drop(columns=["id"], errors="ignore"), use_container_width=True)
 
+# Date filtering
 st.markdown("---")
 st.markdown("## 📅 View Assignments for Date or Range")
 
@@ -77,33 +88,25 @@ if "range_mode" not in st.session_state:
     st.session_state["range_mode"] = False
 
 toggle_label = "🔄 Switch to Range View" if not st.session_state["range_mode"] else "🔄 Switch to Single Date View"
-if st.button(toggle_label, key="toggle_button"):
+if st.button(toggle_label):
     st.session_state["range_mode"] = not st.session_state["range_mode"]
 
 assigned_df = st.session_state.get("assigned", pd.DataFrame())
 unassigned_df = st.session_state.get("unassigned", pd.DataFrame())
 
-# Ensure datetime columns
-if not assigned_df.empty and "check_in" in assigned_df.columns:
-    assigned_df["check_in_dt"] = pd.to_datetime(assigned_df["check_in"], format="%d/%m/%Y", errors="coerce")
-    assigned_df["check_out_dt"] = pd.to_datetime(assigned_df["check_out"], format="%d/%m/%Y", errors="coerce")
-else:
-    assigned_df["check_in_dt"] = pd.NaT
-    assigned_df["check_out_dt"] = pd.NaT
+# Add datetime columns
+for df in [assigned_df, unassigned_df]:
+    if not df.empty and "check_in" in df.columns:
+        df["check_in_dt"] = pd.to_datetime(df["check_in"], format="%d/%m/%Y", errors="coerce")
+        df["check_out_dt"] = pd.to_datetime(df["check_out"], format="%d/%m/%Y", errors="coerce")
 
-if not unassigned_df.empty and "check_in" in unassigned_df.columns:
-    unassigned_df["check_in_dt"] = pd.to_datetime(unassigned_df["check_in"], format="%d/%m/%Y", errors="coerce")
-    unassigned_df["check_out_dt"] = pd.to_datetime(unassigned_df["check_out"], format="%d/%m/%Y", errors="coerce")
-else:
-    unassigned_df["check_in_dt"] = pd.NaT
-    unassigned_df["check_out_dt"] = pd.NaT
-
+# Show filtered view
 if st.session_state["range_mode"]:
     col1, col2 = st.columns(2)
     with col1:
-        start_date = st.date_input("Start Date", format="DD/MM/YYYY", key="start_date")
+        start_date = st.date_input("Start Date", format="DD/MM/YYYY")
     with col2:
-        end_date = st.date_input("End Date", format="DD/MM/YYYY", key="end_date")
+        end_date = st.date_input("End Date", format="DD/MM/YYYY")
 
     if start_date > end_date:
         st.warning("⚠️ End date must be after start date.")
@@ -130,12 +133,8 @@ if st.session_state["range_mode"]:
         else:
             st.info("📭 No unassigned families in that range.")
 else:
-    selected_date = st.date_input("Select a date", format="DD/MM/YYYY", key="single_date")
+    selected_date = st.date_input("Select a date", format="DD/MM/YYYY")
     selected_dt = dt.combine(selected_date, time.min)
-
-    if "check_in_dt" not in unassigned_df.columns or "check_out_dt" not in unassigned_df.columns:
-        unassigned_df["check_in_dt"] = pd.NaT
-        unassigned_df["check_out_dt"] = pd.NaT
 
     assigned_filtered = assigned_df[
         (assigned_df["check_in_dt"] <= selected_dt) & (assigned_df["check_out_dt"] > selected_dt)
@@ -156,32 +155,9 @@ else:
     else:
         st.info("📭 No unassigned families on that date.")
 
-# Logs
-if log_buffer:
+# Debug log
+if "log_lines" in st.session_state:
     st.markdown("---")
-    st.markdown("## 🪵 Assignment Debug Log")
-    for line in log_buffer:
+    st.markdown("### 🐞 Assignment Log")
+    for line in st.session_state["log_lines"]:
         st.text(line)
-
-# Manual reassignment
-st.markdown("---")
-st.markdown("## ✍️ Manual Assignment Editor (Beta)")
-
-edited_df = st.data_editor(
-    st.session_state.get("assigned", pd.DataFrame()),
-    num_rows="dynamic",
-    use_container_width=True,
-    key="editor"
-)
-
-if st.button("✅ Revalidate Manual Assignment"):
-    hard_ok, soft_violations = validate_constraints(edited_df, st.session_state["rooms"])
-    if hard_ok:
-        st.success("✅ All hard constraints satisfied.")
-        if soft_violations:
-            st.warning("⚠️ Some soft constraints not met:")
-            for v in soft_violations:
-                st.text(f"• {v}")
-        st.session_state["assigned"] = edited_df
-    else:
-        st.error("❌ Hard constraint violation. Assignment rejected.")
