@@ -21,12 +21,17 @@ from ui.sections import (
 st.set_page_config(page_title="Room Assignment", layout="wide")
 st.title("🏕️ Room Assignment System")
 
-# Sidebar navigation (explicit links to pages)
+# Sidebar navigation (links only to files under pages/)
 with st.sidebar:
     st.header("Navigation")
-    st.page_link("app.py", label="🏠 Home")
-    st.page_link("pages/01_Assigned_All.py", label="✅ Assigned Families (All)")
-    st.page_link("pages/99_Assignment_Log.py", label="🐞 Assignment Log")
+    # Some Streamlit versions don't register the main script as a page.
+    # We skip a Home link to avoid KeyError and just link to sub-pages.
+    try:
+        st.page_link("pages/01_Assigned_All.py", label="✅ Assigned Families (All)")
+        st.page_link("pages/99_Assignment_Log.py", label="🐞 Assignment Log")
+    except Exception:
+        # If page_link isn't available or pages aren't registered yet:
+        st.info("Use the sidebar page picker (or update Streamlit to enable page links).")
 
     # Optional quick status
     st.markdown("---")
