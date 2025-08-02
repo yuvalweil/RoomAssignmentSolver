@@ -268,3 +268,132 @@ if not st.session_state["assigned"].empty:
                 st.session_state["assigned"].loc[
                     st.session_state["assigned"].query("family == @sel_family").index[sel_idx], "room"
                 ] = fam_rows.loc[sel_idx, "room"]
+            else:
+                st.success("✅ Change applied. No hard violations.")
+                if soft_violations:
+                    st.warning("Some soft constraints are not satisfied:")
+                    for s in soft_violations:
+                        st.write(f"• {s}")
+
+# --- Soft-constraint diagnostics --------------------------------------------
+if not st.session_state["assigned"].empty:
+    st.markdown("---")
+    with st.expander("🔎 Soft-constraint diagnostics", expanded=False):
+        diag = explain_soft_constraints(
+            st.session_state["assigned"],
+            st.session_state["families"],
+            st.session_state["rooms"],
+        )
+        if diag.empty:
+            st.success("All soft constraints were satisfied.")
+        else:
+            st.dataframe(diag, use_container_width=True)
+            st.download_button(
+                "📥 Download soft-constraints report",
+                diag.to_csv(index=False).encode("utf-8-sig"),
+                file_name="soft_constraints_report.csv",
+                mime="text/csv",
+            )
+
+# --- What-if: enforce a specific forced room (sandbox) ----------------------
+if not st.session_state["families"].empty and not st.session_state["rooms"].empty:
+    st.markdown("---")
+    with st.expander("🧪 What-if: enforce a specific forced room (non-destructive)", expanded=False):
+        fam_src = st.session_state["families"].copy()
+        # Normalize family column for labeling
+        if "family" not in fam_src.columns:
+            if "full_name" in fam_src.columns:
+                fam_src["family"] = fam_src["full_name"].astype(str).str.strip()
+            elif "שם מלא" in fam_src.columns:
+                fam_src["family"] = fam_src["שם מלא"].astype(str).str.strip()
+
+        if fam_src.empty:
+            st.info("Upload families.csv to run a what-if.")
+        else:
+            # Build human-readable labels for each source row
+            labels = []
+            for i, r in fam_src.iterrows():
+                fam_name = str(r.get("family", "")).strip()
+                rt = str(r.get("room_type", "")).strip()
+                ci = str(r.get("check_in", "")).strip()
+                co = str(r.get("check_out", "")).strip()
+                fr = str(r.get("forced_room", "")).strip() if "forced_room" in fam_src.columns else ""
+                labels.append(f"{i}: {fam_name} | {rt} | {ci}→{co} | forced={fr or '-'}")
+
+            sel_row_idx = st.selectbox("Pick a source row to pin", list(fam_src.index), format_func=lambda i: labels[list(fam_src.index).index(i)])
+            sel_row = fam_src.loc[sel_row_idx]
+
+            sel_rt = str(sel_row["room_type"]).strip()
+            room_options = st.session_state["rooms"]
+            room_options = room_options[room_options["room_type"].astype(str).str.strip() == sel_rt]
+            room_options = sorted(room_options["room"].astype(str).str.strip().unique())
+
+            chosen_room = st.selectbox("Force this room for the selected row", room_options)
+
+            if st.button("Run what-if"):
+                fam_test = fam_src.copy()
+                if "forced_room" not in fam_test.columns:
+                    fam_test["forced_room"] = ""
+                fam_test.loc[sel_row_idx, "forced_room"] = str(chosen_room)
+
+                whatif_logs = []
+                def _wlog(msg):
+                    from datetime import datetime
+                    ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    whatif_logs.append(f"[{ts}] {msg}")
+
+                new_assigned, new_unassigned = assign_rooms(fam_test, st.session_state["rooms"], log_func=_wlog)
+                hard_ok, soft_violations = validate_constraints(new_assigned)
+
+                st.subheader("Result summary")
+                st.write(f"Hard OK: {'✅' if hard_ok else '❌'}")
+                if soft_violations:
+                    st.write("Soft notes:")
+                    for s in soft_violations:
+                        st.write(f"• {s}")
+
+                if new_unassigned.empty:
+                    st.success("All rows assigned under this what-if scenario.")
+                else:
+                    st.error(f"{len(new_unassigned)} row(s) remained unassigned in this scenario.")
+
+                # Show only the affected family's before/after if present in assigned
+                fam_name = str(sel_row.get("family", "")).strip()
+                st.markdown("#### Before vs After (selected family)")
+                before = st.session_state["assigned"]
+                if not before.empty:
+                    st.write("**Before:**")
+                    st.dataframe(
+                        before[before["family"].astype(str).str.strip() == fam_name],
+                        use_container_width=True,
+                    )
+                st.write("**After (what-if):**")
+                st.dataframe(
+                    new_assigned[new_assigned["family"].astype(str).str.strip() == fam_name],
+                    use_container_width=True,
+                )
+
+                st.download_button(
+                    "📥 Download what-if assigned CSV",
+                    new_assigned.to_csv(index=False).encode("utf-8-sig"),
+                    file_name="whatif_assigned.csv",
+                    mime="text/csv",
+                )
+                st.download_button(
+                    "📥 Download what-if log",
+                    "\n".join(whatif_logs).encode("utf-8-sig"),
+                    file_name="whatif.log",
+                    mime="text/plain",
+                )
+
+# --- Logs: compact view + download ------------------------------------------
+if st.session_state.get("log_lines"):
+    st.markdown("---")
+    st.markdown("### 🐞 Assignment Log")
+
+    n = st.slider("Show last N lines", min_value=20, max_value=1000, value=200, step=20)
+    tail = st.session_state["log_lines"][-n:]
+    st.text_area("Log (compact)", value="\n".join(tail), height=200, label_visibility="collapsed")
+
+    log_bytes = "\n".join(st.session_state["log_lines"]).encode("utf-8-sig")
+    st.download_button("📥 Download Log", log_bytes, file_name="assignment.log", mime="text/plain")
