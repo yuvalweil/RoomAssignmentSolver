@@ -1,7 +1,7 @@
 # app.py — Home page
 import streamlit as st
 
-# Ensure local packages are importable (works when running pages/* too)
+# Ensure local packages are importable (helps when running from different CWDs)
 import sys
 from pathlib import Path
 ROOT = Path(__file__).resolve().parent
@@ -21,29 +21,12 @@ from ui.sections import (
 st.set_page_config(page_title="Room Assignment", layout="wide")
 st.title("🏕️ Room Assignment System")
 
-# Sidebar navigation (links only to files under pages/)
+# Sidebar hint (we use Streamlit's built-in page picker in the sidebar)
 with st.sidebar:
-    st.header("Navigation")
-    # Some Streamlit versions don't register the main script as a page.
-    # We skip a Home link to avoid KeyError and just link to sub-pages.
-    try:
-        st.page_link("pages/01_Assigned_All.py", label="✅ Assigned Families (All)")
-        st.page_link("pages/99_Assignment_Log.py", label="🐞 Assignment Log")
-    except Exception:
-        # If page_link isn't available or pages aren't registered yet:
-        st.info("Use the sidebar page picker (or update Streamlit to enable page links).")
-
-    # Optional quick status
+    st.markdown("### Navigation\nUse the page picker above to switch pages.")
     st.markdown("---")
-    ensure_session_keys()  # safe to call here too
-    assigned = st.session_state.get("assigned")
-    unassigned = st.session_state.get("unassigned")
-    st.caption(
-        f"Assigned rows: **{0 if assigned is None or assigned.empty else len(assigned)}**"
-        + f"\n\nUnassigned rows: **{0 if unassigned is None or unassigned.empty else len(unassigned)}**"
-    )
 
-# Initialize session state (main page flow)
+# Initialize session state
 ensure_session_keys()
 
 # Uploads (reads CSVs + autorun assignment when both CSVs present)
