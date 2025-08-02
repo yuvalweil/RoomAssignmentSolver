@@ -24,15 +24,22 @@ if fam_file:
 if room_file:
     st.session_state["rooms"] = pd.read_csv(room_file)
 
-# Assignment function
+# Run assignment logic
 def run_assignment():
     try:
+        log_lines = []
+
+        def log_func(msg):
+            log_lines.append(msg)
+
         assigned_df, unassigned_df = assign_rooms(
             st.session_state["families"],
-            st.session_state["rooms"]
+            st.session_state["rooms"],
+            log_func=log_func
         )
         st.session_state["assigned"] = assigned_df
         st.session_state["unassigned"] = unassigned_df
+        st.session_state["log"] = log_lines
         st.success("✅ Room assignment completed.")
     except Exception as e:
         st.error(f"❌ Assignment error: {e}")
@@ -50,7 +57,7 @@ def highlight_forced(row):
         return ["background-color: #fff9c4"] * len(row)
     return [""] * len(row)
 
-# Full overview
+# Show full assignments
 st.markdown("## 📋 Full Assignment Overview")
 col1, col2 = st.columns(2)
 
@@ -68,7 +75,7 @@ with col2:
         unassigned_display = st.session_state["unassigned"].drop(columns=["id"], errors="ignore")
         st.dataframe(unassigned_display, use_container_width=True)
 
-# Date filter toggle
+# Toggle date/range view
 st.markdown("---")
 st.markdown("## 📅 View Assignments for Date or Range")
 
@@ -82,22 +89,21 @@ if st.button(toggle_label, key="toggle_button"):
 assigned_df = st.session_state.get("assigned", pd.DataFrame())
 unassigned_df = st.session_state.get("unassigned", pd.DataFrame())
 
-# Ensure date columns exist
-if "check_in" in assigned_df.columns and "check_out" in assigned_df.columns:
+# Add datetime columns
+if not assigned_df.empty and "check_in" in assigned_df.columns:
     assigned_df["check_in_dt"] = pd.to_datetime(assigned_df["check_in"], format="%d/%m/%Y", errors="coerce")
     assigned_df["check_out_dt"] = pd.to_datetime(assigned_df["check_out"], format="%d/%m/%Y", errors="coerce")
 else:
     assigned_df["check_in_dt"] = pd.NaT
     assigned_df["check_out_dt"] = pd.NaT
 
-if "check_in" in unassigned_df.columns and "check_out" in unassigned_df.columns:
+if not unassigned_df.empty and "check_in" in unassigned_df.columns:
     unassigned_df["check_in_dt"] = pd.to_datetime(unassigned_df["check_in"], format="%d/%m/%Y", errors="coerce")
     unassigned_df["check_out_dt"] = pd.to_datetime(unassigned_df["check_out"], format="%d/%m/%Y", errors="coerce")
 else:
     unassigned_df["check_in_dt"] = pd.NaT
     unassigned_df["check_out_dt"] = pd.NaT
 
-# Filtered view
 if st.session_state["range_mode"]:
     col1, col2 = st.columns(2)
     with col1:
@@ -151,3 +157,11 @@ else:
         st.dataframe(unassigned_filtered.drop(columns=["id"], errors="ignore")[["people", "check_in", "check_out", "room_type", "forced_room"]], use_container_width=True)
     else:
         st.info("📭 No unassigned families on that date.")
+
+# Debug log section
+with st.expander("📜 View Assignment Debug Log"):
+    if "log" in st.session_state and st.session_state["log"]:
+        for line in st.session_state["log"]:
+            st.text(line)
+    else:
+        st.info("No debug log available.")
