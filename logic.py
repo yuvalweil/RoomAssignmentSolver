@@ -1,25 +1,18 @@
 import pandas as pd
 from datetime import datetime as dt
 
-# Tracks booked date ranges per room
 room_calendars = {}
 
-# Check if a room is available for the requested date range
 def is_available(room, check_in_str, check_out_str):
     check_in = dt.strptime(check_in_str, "%d/%m/%Y")
     check_out = dt.strptime(check_out_str, "%d/%m/%Y")
-
     if room not in room_calendars:
-        room_calendars[room] = []
-
+        return True
     for (start, end) in room_calendars[room]:
-        # Overlapping range
         if not (check_out <= start or check_in >= end):
             return False
-
     return True
 
-# Reserve a room for a specific time range
 def reserve(room, check_in_str, check_out_str):
     check_in = dt.strptime(check_in_str, "%d/%m/%Y")
     check_out = dt.strptime(check_out_str, "%d/%m/%Y")
@@ -27,8 +20,7 @@ def reserve(room, check_in_str, check_out_str):
         room_calendars[room] = []
     room_calendars[room].append((check_in, check_out))
 
-# Main assignment function
-def assign_rooms(families_df, rooms_df):
+def assign_rooms(families_df, rooms_df, log_func=None):
     global room_calendars
     room_calendars = {}
 
@@ -36,36 +28,26 @@ def assign_rooms(families_df, rooms_df):
     unassigned = []
 
     rooms_by_type = rooms_df.groupby("room_type")["room"].apply(lambda x: sorted(x)).to_dict()
+    family_groups = families_df.groupby(families_df["full_name" if "full_name" in families_df.columns else "שם מלא"])
 
-    if "full_name" in families_df.columns:
-        name_col = "full_name"
-    elif "שם מלא" in families_df.columns:
-        name_col = "שם מלא"
-    else:
-        raise ValueError("Missing full name column")
+    forced_families = families_df[families_df["forced_room"].notna()]
+    forced_family_names = forced_families["full_name"].unique().tolist()
 
-    family_groups = families_df.groupby(families_df[name_col])
+    all_processed = set()
 
-    # STEP 1: Assign forced_room + rest of that family
-    processed_families = set()
-    forced_rows = families_df.dropna(subset=["forced_room"])
-    forced_families = forced_rows[name_col].unique()
-
-    def process_family(family, group):
-        group = group.sort_values(by="check_in")
+    def process_group(family, group):
+        nonlocal assigned, unassigned
+        if log_func: log_func(f"🔍 Processing {family}")
         for room_type, orders in group.groupby("room_type"):
             available_rooms = [r for r in rooms_by_type.get(room_type, []) if all(
                 is_available(r, row["check_in"], row["check_out"]) for _, row in orders.iterrows()
             )]
-
             found = False
             for i in range(len(available_rooms) - len(orders) + 1):
                 block = available_rooms[i:i+len(orders)]
-                if all(
-                    is_available(block[j], row["check_in"], row["check_out"])
-                    for j, (_, row) in enumerate(orders.iterrows())
-                ):
+                if all(is_available(block[j], row["check_in"], row["check_out"]) for j, (_, row) in enumerate(orders.iterrows())):
                     for j, (_, row) in enumerate(orders.iterrows()):
+                        reserve(block[j], row["check_in"], row["check_out"])
                         assigned.append({
                             "family": family,
                             "room": block[j],
@@ -74,29 +56,26 @@ def assign_rooms(families_df, rooms_df):
                             "check_out": row["check_out"],
                             "forced_room": row.get("forced_room", None)
                         })
-                        reserve(block[j], row["check_in"], row["check_out"])
+                        if log_func: log_func(f"✅ Assigned {family} to {block[j]}")
                     found = True
                     break
-
             if not found:
                 for _, row in orders.iterrows():
                     assigned_room = None
-
-                    # First try forced_room if applicable
                     if pd.notna(row.get("forced_room")):
-                        forced = row["forced_room"]
-                        if is_available(forced, row["check_in"], row["check_out"]):
-                            assigned_room = forced
-                            reserve(forced, row["check_in"], row["check_out"])
-
-                    # Else try any room
-                    if not assigned_room:
+                        fr = row["forced_room"]
+                        if is_available(fr, row["check_in"], row["check_out"]):
+                            reserve(fr, row["check_in"], row["check_out"])
+                            assigned_room = fr
+                            if log_func: log_func(f"✅ Forced room {fr} assigned to {family}")
+                        else:
+                            if log_func: log_func(f"❌ Forced room {fr} NOT available for {family}")
+                    else:
                         for room in rooms_by_type.get(room_type, []):
                             if is_available(room, row["check_in"], row["check_out"]):
-                                assigned_room = room
                                 reserve(room, row["check_in"], row["check_out"])
+                                assigned_room = room
                                 break
-
                     if assigned_room:
                         assigned.append({
                             "family": family,
@@ -106,21 +85,21 @@ def assign_rooms(families_df, rooms_df):
                             "check_out": row["check_out"],
                             "forced_room": row.get("forced_room", None)
                         })
+                        if log_func: log_func(f"✅ Assigned {family} to {assigned_room}")
                     else:
                         unassigned.append(row.to_dict())
+                        if log_func: log_func(f"❌ Could not assign {family} for {room_type} on {row['check_in']}")
 
-    for family in forced_families:
-        if family in family_groups.groups:
-            group = family_groups.get_group(family)
-            process_family(family, group)
-            processed_families.add(family)
-
-    # STEP 2: assign all other families
-    for family, group in family_groups:
-        if family in processed_families:
+    for fr_name in forced_family_names:
+        if fr_name in all_processed:
             continue
-        process_family(family, group)
+        group = family_groups.get_group(fr_name)
+        process_group(fr_name, group)
+        all_processed.add(fr_name)
 
-    assigned_df = pd.DataFrame(assigned)
-    unassigned_df = pd.DataFrame(unassigned)
-    return assigned_df, unassigned_df
+    for family, group in family_groups:
+        if family in all_processed:
+            continue
+        process_group(family, group)
+
+    return pd.DataFrame(assigned), pd.DataFrame(unassigned)
