@@ -1,7 +1,8 @@
 # logic.py
+from __future__ import annotations
 import re
 from datetime import datetime as dt
-from typing import Callable, Dict, List, Tuple
+from typing import Callable, Dict, List, Tuple, Optional
 
 import pandas as pd
 
@@ -78,60 +79,198 @@ def reserve(room_type: str, room: str, check_in_str: str, check_out_str: str) ->
     room_calendars[key].append((check_in, check_out))
 
 
-# -------------------------- Assignment Primitives ----------------------------
+# ------------------------- Interval/Capacity Helpers -------------------------
 
-def _assign_rows_in_block(
-    rows_df: pd.DataFrame,
+def _max_overlap(rows: List[dict]) -> int:
+    """Return the maximum number of overlapping intervals (lower bound on rooms needed)."""
+    events = []
+    for r in rows:
+        events.append((_parse_date(r["check_in"]), 1))
+        events.append((_parse_date(r["check_out"]), -1))
+    events.sort()
+    cur = best = 0
+    for _, delta in events:
+        cur += delta
+        best = max(best, cur)
+    return best
+
+
+def _no_conflict_with_schedule(room_sched: List[Tuple[dt, dt]], start: dt, end: dt) -> bool:
+    for s, e in room_sched:
+        if _overlaps(s, e, start, end):
+            return False
+    return True
+
+
+# ---------------------------- Global Solver (per type) -----------------------
+
+def _assign_per_type(
+    rows: List[dict],
+    rooms: List[str],
     room_type: str,
-    block: List[str],
     log_func: Callable[[str], None],
-) -> Dict[int, str] | None:
+) -> Tuple[Dict[int, str], List[int], List[int]]:
     """
-    Try to assign all rows in rows_df into the given 'block' (contiguous, same type),
-    honoring forced_room when present and per-row availability.
-    Returns mapping: index -> assigned_room, or None if impossible.
+    Assign all rows of a given room_type using:
+      1) Forced pre-placement (greedy, conflict-detecting)
+      2) Backtracking with MRV (minimum remaining values) to fill the rest
+    Returns:
+      assignment_map: {row_idx -> room_label}
+      waived_forced_indices: [row_idx ...]  (forced waived to enable full assignment)
+      unassigned_indices:    [row_idx ...]  (if impossible; capacity shortfall)
     """
-    block = [_norm_room(r) for r in block]
+    # Normalize room labels
+    rooms = [_norm_room(r) for r in rooms]
+    rooms.sort(key=_room_sort_key)
 
-    # Forced rooms per row, cleaned
-    forced_map = {
-        idx: _clean_opt(row.get("forced_room", ""))
-        for idx, row in rows_df.iterrows()
-        if _clean_opt(row.get("forced_room", ""))
-    }
+    # Prepare schedules per room (local to this type run)
+    schedules: Dict[str, List[Tuple[dt, dt]]] = {r: [] for r in rooms}
 
-    # All forced rooms must be inside the block and available for the row
-    used = set()
+    # Index rows for stable reference
+    for i, r in enumerate(rows):
+        r["_idx"] = i
+        r["_start"] = _parse_date(r["check_in"])
+        r["_end"] = _parse_date(r["check_out"])
+        r["_forced"] = _clean_opt(r.get("forced_room", ""))
+
+    # Quick feasibility check (lower bound)
+    if _max_overlap(rows) > len(rooms):
+        log_func(
+            f"⚠️ {room_type}: required concurrent rooms exceed available ({_max_overlap(rows)} > {len(rooms)})."
+        )
+
+    # ------------- Step 1: Forced pre-placement with conflict resolution -----
     assignment: Dict[int, str] = {}
+    waived_forced: List[int] = []
 
-    for idx, row in rows_df.iterrows():
-        fr = forced_map.get(idx, "")
-        if not fr:
-            continue
-        if fr not in block:
-            return None  # this block cannot satisfy the forced set for this family/type
-        if not is_available(room_type, fr, row["check_in"], row["check_out"]):
-            return None
-        assignment[idx] = fr
-        used.add(fr)
-
-    # Place remaining rows greedily within the block
-    for idx, row in rows_df.iterrows():
-        if idx in assignment:
-            continue
-        placed = False
-        for r in block:
-            if r in used:
+    # Group by forced room
+    forced_groups: Dict[str, List[dict]] = {}
+    for r in rows:
+        if r["_forced"]:
+            if r["_forced"] not in rooms:
+                # Non-existent room label; must waive
+                waived_forced.append(r["_idx"])
+                r["_forced"] = ""
+                log_func(f"⚠️ {r['family']}/{room_type}: forced room {r.get('forced_room')} not found → waived.")
                 continue
-            if is_available(room_type, r, row["check_in"], row["check_out"]):
-                assignment[idx] = r
-                used.add(r)
-                placed = True
-                break
-        if not placed:
-            return None
+            forced_groups.setdefault(r["_forced"], []).append(r)
 
-    return assignment
+    # For each forced room, greedily place non-overlapping rows; waive the conflicting ones
+    for forced_room, group in forced_groups.items():
+        # Sort by earliest end to pack more (classic interval scheduling)
+        group_sorted = sorted(group, key=lambda x: (x["_end"], x["_start"]))
+        placed_intervals: List[Tuple[dt, dt, int]] = []
+        for r in group_sorted:
+            can_place = True
+            for (s, e, _) in placed_intervals:
+                if _overlaps(s, e, r["_start"], r["_end"]):
+                    can_place = False
+                    break
+            if can_place and _no_conflict_with_schedule(schedules[forced_room], r["_start"], r["_end"]):
+                schedules[forced_room].append((r["_start"], r["_end"]))
+                assignment[r["_idx"]] = forced_room
+                placed_intervals.append((r["_start"], r["_end"], r["_idx"]))
+                # keep forced
+            else:
+                # waive this forced — will be assigned later by solver
+                waived_forced.append(r["_idx"])
+                r["_forced"] = ""
+                log_func(
+                    f"⚠️ {r['family']}/{room_type}: forced {forced_room} overlaps with another forced → waived."
+                )
+
+    # ------------- Step 2: Backtracking for all remaining rows ---------------
+    # Build the set of remaining row indices to assign
+    remainder: List[dict] = [r for r in rows if r["_idx"] not in assignment]
+
+    # Helper: candidates per row given current schedules
+    def candidates_for(row: dict) -> List[str]:
+        start, end = row["_start"], row["_end"]
+        cands = []
+        for rm in rooms:
+            # Respect current assignments (schedules filled)
+            if _no_conflict_with_schedule(schedules[rm], start, end):
+                cands.append(rm)
+        # Prefer rooms that keep serial with same family's already assigned rooms
+        fam_rooms = {assignment[idx] for idx in assignment if rows[idx]["family"] == row["family"]}
+        def serial_score(rm: str) -> int:
+            # count how many already-assigned rooms for this family are serial with rm
+            score = 0
+            for fr in fam_rooms:
+                if are_serial(fr, rm):
+                    score += 1
+            return -score  # negative for ascending sort; more serial → smaller key
+        cands.sort(key=lambda rm: (serial_score(rm), _room_sort_key(rm)))
+        return cands
+
+    # MRV selection: pick row with fewest candidates
+    def select_unassigned(unassigned: List[dict]) -> Optional[dict]:
+        best = None
+        best_count = 10**9
+        for r in unassigned:
+            c = candidates_for(r)
+            cnt = len(c)
+            if cnt < best_count:
+                best = r
+                best_count = cnt
+                if cnt == 0:
+                    # Early fail shortcut
+                    return r
+        return best
+
+    solved = False
+    best_partial_assignment: Dict[int, str] = assignment.copy()  # in case of failure
+
+    def backtrack(unassigned: List[dict]) -> bool:
+        nonlocal solved, best_partial_assignment
+        if not unassigned:
+            solved = True
+            return True
+
+        # MRV: row with fewest valid rooms now
+        row = select_unassigned(unassigned)
+        cands = candidates_for(row)
+
+        if not cands:
+            # dead end
+            return False
+
+        # Try each candidate room
+        for rm in cands:
+            # Place
+            schedules[rm].append((row["_start"], row["_end"]))
+            assignment[row["_idx"]] = rm
+
+            # Recurse
+            nxt = [r for r in unassigned if r["_idx"] != row["_idx"]]
+            if backtrack(nxt):
+                return True
+
+            # Undo
+            schedules[rm].pop()
+            assignment.pop(row["_idx"], None)
+
+        # Track best partial (more assigned rows)
+        if len(assignment) > len(best_partial_assignment):
+            best_partial_assignment = assignment.copy()
+
+        return False
+
+    if remainder:
+        backtrack(remainder)
+
+    if not solved and remainder:
+        # Could not fully assign; compute which rows remain unassigned
+        assigned_now = set(assignment.keys())
+        all_ids = {r["_idx"] for r in rows}
+        unassigned_ids = sorted(list(all_ids - assigned_now))
+        # Log a concise summary
+        log_func(
+            f"❌ {room_type}: could not assign {len(unassigned_ids)} row(s) without breaking hard constraints."
+        )
+        return assignment, waived_forced, unassigned_ids
+
+    return assignment, waived_forced, []
 
 
 # ------------------------------- Main API ------------------------------------
@@ -142,11 +281,13 @@ def assign_rooms(
     log_func: Callable[[str], None] = print,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     """
-    Compute room assignments.
-
+    Compute room assignments with relaxation:
+      - Try to honor forced rooms; waive only when necessary to assign everyone.
+      - Prefer serial rooms but never at the expense of feasibility.
+      - Never violate hard constraints (no double bookings; room_type bound).
     Returns:
         assigned_df: columns = [family, room, room_type, check_in, check_out, forced_room]
-        unassigned_df: original unassigned rows with their original columns
+        unassigned_df: original unassigned rows with their original columns (only if impossible)
     """
     # Reset calendars each run
     global room_calendars
@@ -188,109 +329,52 @@ def assign_rooms(
     assigned_rows: List[dict] = []
     unassigned_rows: List[dict] = []
 
-    processed_families: set[str] = set()
+    # Solve independently per room_type
+    for rt, group in fam.groupby("room_type", sort=False):
+        rows = group.to_dict("records")
+        available = rooms_by_type.get(rt, [])
+        if not available:
+            # No rooms of this type exist → all rows unassigned
+            for r in rows:
+                unassigned_rows.append(r)
+            log_func(f"❌ {rt}: no rooms of this type are defined.")
+            continue
 
-    # Families that have at least one forced row
-    forced_families = set(fam.loc[fam["forced_room"] != "", "family"].unique())
+        assignment_map, waived_forced_ids, unassigned_ids = _assign_per_type(rows, available, rt, log_func)
 
-    def process_family_group(family_group: pd.DataFrame, is_forced_batch: bool = False):
-        family_name = str(family_group["family"].iloc[0])
-        if family_name in processed_families:
-            return
-
-        log_func(f"🔍 {family_name}: start")
-        processed_families.add(family_name)
-
-        # Process per room_type to keep seriality within each type
-        for rt, group in family_group.groupby("room_type"):
-            rows = group.sort_values(["check_in", "check_out"]).copy()
-            available = rooms_by_type.get(rt, [])
-
-            if not available:
-                for _, row in rows.iterrows():
-                    unassigned_rows.append(row.to_dict())
-                log_func(f"❌ {family_name}/{rt}: no rooms of this type are defined")
-                continue
-
-            # Try to place as a contiguous block first (serial preference)
-            placed = False
-            need = len(rows)
-            for i in range(0, max(0, len(available) - need + 1)):
-                block = available[i : i + need]
-                assignment = _assign_rows_in_block(rows, rt, block, log_func)
-                if assignment:
-                    for idx, row in rows.iterrows():
-                        r = assignment[idx]
-                        reserve(rt, r, row["check_in"], row["check_out"])
-                        assigned_rows.append(
-                            {
-                                "family": family_name,
-                                "room": r,
-                                "room_type": rt,
-                                "check_in": row["check_in"],
-                                "check_out": row["check_out"],
-                                "forced_room": _clean_opt(row.get("forced_room", "")),
-                            }
-                        )
-                        fr_clean = _clean_opt(row.get("forced_room", ""))
-                        if fr_clean and r == fr_clean:
-                            log_func(f"🏷️ {family_name}/{rt}: used forced room {r}")
-                        else:
-                            log_func(f"✅ {family_name}/{rt}: assigned {r}")
-                    placed = True
-                    break
-
-            if placed:
-                continue
-
-            # Fallback: assign each row independently (still respect forced when possible)
-            for _, row in rows.iterrows():
-                target_force = _clean_opt(row.get("forced_room", "")) if is_forced_batch else ""
-                assigned_room = None
-
-                if target_force:
-                    if target_force not in available:
-                        log_func(f"⚠️ {family_name}/{rt}: forced room {target_force} not found in this room_type")
-                    elif is_available(rt, target_force, row["check_in"], row["check_out"]):
-                        assigned_room = target_force
-                        log_func(f"🏷️ {family_name}/{rt}: forced room {target_force} used")
-                    else:
-                        log_func(
-                            f"⚠️ {family_name}/{rt}: forced {target_force} unavailable for "
-                            f"{row['check_in']}-{row['check_out']}"
-                        )
-
-                if assigned_room is None:
-                    for r in available:
-                        if is_available(rt, r, row["check_in"], row["check_out"]):
-                            assigned_room = r
-                            break
-
-                if assigned_room:
-                    reserve(rt, assigned_room, row["check_in"], row["check_out"])
-                    assigned_rows.append(
-                        {
-                            "family": family_name,
-                            "room": assigned_room,
-                            "room_type": rt,
-                            "check_in": row["check_in"],
-                            "check_out": row["check_out"],
-                            "forced_room": _clean_opt(row.get("forced_room", "")),
-                        }
-                    )
-                    log_func(f"✅ {family_name}/{rt}: assigned {assigned_room}")
+        # Build outputs; also reserve into global calendars for validate & override flows
+        for r in rows:
+            idx = r["_idx"]
+            if idx in assignment_map:
+                room_assigned = assignment_map[idx]
+                reserve(rt, room_assigned, r["check_in"], r["check_out"])
+                assigned_rows.append(
+                    {
+                        "family": r["family"],
+                        "room": room_assigned,
+                        "room_type": rt,
+                        "check_in": r["check_in"],
+                        "check_out": r["check_out"],
+                        "forced_room": _clean_opt(r.get("forced_room", "")),
+                    }
+                )
+                # Logging
+                fr = _clean_opt(r.get("forced_room", ""))
+                if fr and idx not in waived_forced_ids and room_assigned == fr:
+                    log_func(f"🏷️ {r['family']}/{rt}: used forced room {room_assigned}")
+                elif fr and idx in waived_forced_ids:
+                    log_func(f"⚠️ {r['family']}/{rt}: forced {fr} waived to enable full assignment (assigned {room_assigned}).")
                 else:
-                    unassigned_rows.append(row.to_dict())
-                    log_func(f"❌ {family_name}/{rt}: could not assign row")
+                    log_func(f"✅ {r['family']}/{rt}: assigned {room_assigned}")
+            else:
+                # truly unassigned (capacity shortfall)
+                unassigned_rows.append(r)
 
-    # Step 1: families with at least one forced row (and process all their rows)
-    for fam_name in forced_families:
-        process_family_group(fam[fam["family"] == fam_name], is_forced_batch=True)
-
-    # Step 2: the rest
-    for fam_name, fam_group in fam.groupby("family"):
-        if fam_name not in processed_families:
-            process_family_group(fam_group, is_forced_batch=False)
+        # Summary notes per type
+        if waived_forced_ids:
+            log_func(f"ℹ️ {rt}: waived {len(waived_forced_ids)} forced preference(s) to assign everyone else.")
+        if unassigned_ids:
+            log_func(f"ℹ️ {rt}: {len(unassigned_ids)} row(s) remain unassigned — capacity/overlap infeasible.")
 
     assigned_df = pd.DataFrame(assigned_rows)
     unassigned_df = pd.DataFrame(unassigned_rows)
