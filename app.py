@@ -44,6 +44,12 @@ if "families" in st.session_state and "rooms" in st.session_state:
     if st.button("🔁 Recalculate Assignment"):
         run_assignment()
 
+# Highlight function for forced_room rows
+def highlight_forced(row):
+    if pd.notna(row.get("forced_room")) and str(row["forced_room"]).strip():
+        return ["background-color: #fff9c4"] * len(row)
+    return [""] * len(row)
+
 # Show full assignments
 st.markdown("## 📋 Full Assignment Overview")
 col1, col2 = st.columns(2)
@@ -51,7 +57,8 @@ col1, col2 = st.columns(2)
 with col1:
     if "assigned" in st.session_state:
         st.subheader("✅ Assigned Families (All)")
-        st.dataframe(st.session_state["assigned"], use_container_width=True)
+        styled_df = st.session_state["assigned"][["family", "room", "room_type", "check_in", "check_out", "forced_room"]].style.apply(highlight_forced, axis=1)
+        st.write(styled_df)
         csv = st.session_state["assigned"].to_csv(index=False).encode("utf-8")
         st.download_button("📥 Download Assigned", csv, "assigned_families.csv", "text/csv")
 
@@ -114,7 +121,8 @@ if st.session_state["range_mode"]:
 
         st.subheader(f"✅ Assigned Families from {start_date.strftime('%d/%m/%Y')} to {end_date.strftime('%d/%m/%Y')}")
         if not assigned_filtered.empty:
-            st.dataframe(assigned_filtered[["family", "room", "room_type", "check_in", "check_out", "forced_room"]], use_container_width=True)
+            styled = assigned_filtered[["family", "room", "room_type", "check_in", "check_out", "forced_room"]].style.apply(highlight_forced, axis=1)
+            st.write(styled)
         else:
             st.info("📭 No assigned families in that range.")
 
@@ -136,7 +144,8 @@ else:
 
     st.subheader(f"✅ Assigned Families on {selected_date.strftime('%d/%m/%Y')}")
     if not assigned_filtered.empty:
-        st.dataframe(assigned_filtered[["family", "room", "room_type", "check_in", "check_out", "forced_room"]], use_container_width=True)
+        styled = assigned_filtered[["family", "room", "room_type", "check_in", "check_out", "forced_room"]].style.apply(highlight_forced, axis=1)
+        st.write(styled)
     else:
         st.info("📭 No assigned families on that date.")
 
