@@ -23,6 +23,9 @@ def is_available(room, check_in_str, check_out_str):
 
 # Main assignment function
 def assign_rooms(families_df, rooms_df):
+    global room_calendars
+    room_calendars = {}  # ✅ Reset availability state before every run
+
     assigned = []
     unassigned = []
 
