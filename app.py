@@ -1,42 +1,32 @@
-# app.py — Home page
 import streamlit as st
-
-# Ensure local packages are importable (helps when running from different CWDs)
-import sys
-from pathlib import Path
-ROOT = Path(__file__).resolve().parent
-if str(ROOT) not in sys.path:
-    sys.path.insert(0, str(ROOT))
-
 from ui.helpers import ensure_session_keys
 from ui.upload import render_uploads
 from ui.sections import (
     render_recalc_button,
+    render_assigned_overview,
     render_date_or_range_view,
     render_manual_override,
     render_diagnostics,
     render_what_if,
+    render_logs,
 )
 
 st.set_page_config(page_title="Room Assignment", layout="wide")
 st.title("🏕️ Room Assignment System")
 
-# Sidebar hint (we use Streamlit's built-in page picker in the sidebar)
-with st.sidebar:
-    st.markdown("### Navigation\nUse the page picker above to switch pages.")
-    st.markdown("---")
-
-# Initialize session state
+# init session keys
 ensure_session_keys()
 
-# Uploads (reads CSVs + autorun assignment when both CSVs present)
+# Uploads (reads CSVs + auto-run if both present)
 render_uploads()
 
-# Manual recalc
+# Recalculate button
 render_recalc_button()
 
-# Main sections on Home
+# Sections
+render_assigned_overview()
 render_date_or_range_view()
 render_manual_override()
 render_diagnostics()
 render_what_if()
+render_logs()
