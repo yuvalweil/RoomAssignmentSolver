@@ -34,7 +34,9 @@ def assign_rooms(families_df, rooms_df):
         family = row.get("שם מלא") or row.get("full_name") or row.get("family")
         check_in = row["check_in"]
         check_out = row["check_out"]
-        room_type = row["room_type"]
+        room_type = row.get("room_type")
+        if not room_type:
+            raise ValueError(f"Missing 'room_type' in row: {row.to_dict()}")
 
         assigned_room = None
 
@@ -47,6 +49,7 @@ def assign_rooms(families_df, rooms_df):
             assigned.append({
                 "family": family,
                 "room": assigned_room,
+                "room_type": room_type,
                 "check_in": check_in,
                 "check_out": check_out
             })
