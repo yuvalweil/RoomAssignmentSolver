@@ -24,11 +24,18 @@ if fam_file:
 if room_file:
     st.session_state["rooms"] = pd.read_csv(room_file)
 
+# Run assignment logic
 def run_assignment():
     try:
+        def log_func(msg):
+            if "log" not in st.session_state:
+                st.session_state["log"] = []
+            st.session_state["log"].append(msg)
+
         assigned_df, unassigned_df = assign_rooms(
             st.session_state["families"],
-            st.session_state["rooms"]
+            st.session_state["rooms"],
+            log_func=log_func  # ✅ Pass debug logger
         )
         st.session_state["assigned"] = assigned_df
         st.session_state["unassigned"] = unassigned_df
@@ -65,7 +72,7 @@ with col2:
         unassigned_display = st.session_state["unassigned"].drop(columns=["id"], errors="ignore")
         st.dataframe(unassigned_display, use_container_width=True)
 
-# Date filter toggle
+# Toggle between date and range
 st.markdown("---")
 st.markdown("## 📅 View Assignments for Date or Range")
 
@@ -79,7 +86,6 @@ if st.button(toggle_label, key="toggle_button"):
 assigned_df = st.session_state.get("assigned", pd.DataFrame())
 unassigned_df = st.session_state.get("unassigned", pd.DataFrame())
 
-# Add datetime columns
 if not assigned_df.empty and "check_in" in assigned_df.columns:
     assigned_df["check_in_dt"] = pd.to_datetime(assigned_df["check_in"], format="%d/%m/%Y", errors="coerce")
     assigned_df["check_out_dt"] = pd.to_datetime(assigned_df["check_out"], format="%d/%m/%Y", errors="coerce")
@@ -147,3 +153,9 @@ else:
         st.dataframe(unassigned_filtered.drop(columns=["id"], errors="ignore")[["people", "check_in", "check_out", "room_type", "forced_room"]], use_container_width=True)
     else:
         st.info("📭 No unassigned families on that date.")
+
+# Optional: Show debug log
+if "log" in st.session_state:
+    with st.expander("🪵 Debug Log"):
+        for line in st.session_state["log"]:
+            st.text(line)
