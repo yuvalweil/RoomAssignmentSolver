@@ -35,9 +35,13 @@ def assign_rooms(families_df, rooms_df, log_func=None):
 
     all_processed = set()
 
+    def log(msg):
+        if log_func:
+            log_func(msg)
+
     def process_group(family, group):
         nonlocal assigned, unassigned
-        if log_func: log_func(f"🔍 Processing {family}")
+        log(f"🔍 Processing {family}")
         for room_type, orders in group.groupby("room_type"):
             available_rooms = [r for r in rooms_by_type.get(room_type, []) if all(
                 is_available(r, row["check_in"], row["check_out"]) for _, row in orders.iterrows()
@@ -56,7 +60,7 @@ def assign_rooms(families_df, rooms_df, log_func=None):
                             "check_out": row["check_out"],
                             "forced_room": row.get("forced_room", None)
                         })
-                        if log_func: log_func(f"✅ Assigned {family} to {block[j]}")
+                        log(f"✅ Assigned {family} to {block[j]}")
                     found = True
                     break
             if not found:
@@ -67,9 +71,9 @@ def assign_rooms(families_df, rooms_df, log_func=None):
                         if is_available(fr, row["check_in"], row["check_out"]):
                             reserve(fr, row["check_in"], row["check_out"])
                             assigned_room = fr
-                            if log_func: log_func(f"✅ Forced room {fr} assigned to {family}")
+                            log(f"✅ Forced room {fr} assigned to {family}")
                         else:
-                            if log_func: log_func(f"❌ Forced room {fr} NOT available for {family}")
+                            log(f"❌ Forced room {fr} NOT available for {family}")
                     else:
                         for room in rooms_by_type.get(room_type, []):
                             if is_available(room, row["check_in"], row["check_out"]):
@@ -85,10 +89,10 @@ def assign_rooms(families_df, rooms_df, log_func=None):
                             "check_out": row["check_out"],
                             "forced_room": row.get("forced_room", None)
                         })
-                        if log_func: log_func(f"✅ Assigned {family} to {assigned_room}")
+                        log(f"✅ Assigned {family} to {assigned_room}")
                     else:
                         unassigned.append(row.to_dict())
-                        if log_func: log_func(f"❌ Could not assign {family} for {room_type} on {row['check_in']}")
+                        log(f"❌ Could not assign {family} for {room_type} on {row['check_in']}")
 
     for fr_name in forced_family_names:
         if fr_name in all_processed:
