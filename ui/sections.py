@@ -10,8 +10,8 @@ from .helpers import (
     family_filters_ui,
     roomtype_filters_ui,
     apply_filters,
-    build_day_sheet_sections,   # for printable daily sheet
-    daily_sheet_html,           # for printable daily sheet
+    build_day_sheet_sections,   # printable sheet data
+    daily_sheet_html,           # printable sheet HTML
 )
 from .runner import run_assignment
 from logic import rebuild_calendar_from_assignments, validate_constraints, explain_soft_constraints
@@ -176,7 +176,7 @@ def render_date_or_range_view():
 
 # ---------- Daily Operations Sheet (Printable) -------------------------------
 def render_daily_operations_sheet():
-    """Printable daily sheet + download as a single HTML file."""
+    """Printable daily sheet + download as a single HTML file with your desired columns."""
     st.markdown("---")
     st.markdown("## 🗂️ Daily Operations Sheet (Printable)")
 
@@ -198,16 +198,20 @@ def render_daily_operations_sheet():
 
     sections = build_day_sheet_sections(assigned, families_df, rooms_df, on_dt, include_empty)
 
-    # Preview
+    # Preview in the app, with the exact columns & order:
+    preview_cols = ["unit","name","people","nights","extra","breakfast","paid","charge","notes"]
+    preview_headers = ["יחידה","שם","אנשים","לילות","תוספת","א.בוקר","שולם","לחיוב","הערות"]
+
     for sec, rows in sections.items():
         st.subheader(sec)
         if rows:
-            df = pd.DataFrame(rows, columns=["room","family","people","nights","breakfast","notes"])
+            df = pd.DataFrame(rows, columns=preview_cols)
+            df.columns = preview_headers
             st.dataframe(df, use_container_width=True)
         else:
             st.caption("— אין נתונים —")
 
-    # Download HTML
+    # Download as single HTML with your header order
     html_str = daily_sheet_html(sections, on_dt)
     st.download_button(
         "📥 Download printable HTML",
@@ -336,7 +340,7 @@ def render_what_if():
                 fam_test["forced_room"] = ""
             fam_test.loc[sel_row_idx, "forced_room"] = str(chosen_room)
 
-            from logic import assign_rooms  # keep import local
+            from logic import assign_rooms  # local import
             new_assigned, new_unassigned = assign_rooms(fam_test, st.session_state["rooms"], log_func=lambda m: None)
             hard_ok, soft_violations = validate_constraints(new_assigned)
 
