@@ -60,6 +60,26 @@ def run_assignment():
     except Exception as e:
         st.error(f"❌ Assignment error: {e}")
 
+# Ensure we always have datetime columns, even for empty DataFrames
+def with_dt_cols(df: pd.DataFrame) -> pd.DataFrame:
+    df = df.copy()
+    # If frame is empty, create empty datetime columns to prevent KeyError on selection
+    if df.empty:
+        df["check_in_dt"] = pd.to_datetime(pd.Series([], dtype="datetime64[ns]"))
+        df["check_out_dt"] = pd.to_datetime(pd.Series([], dtype="datetime64[ns]"))
+        return df
+
+    # If textual dates exist, parse them; otherwise create NaT columns
+    if "check_in" in df.columns:
+        df["check_in_dt"] = pd.to_datetime(df["check_in"], format="%d/%m/%Y", errors="coerce")
+    else:
+        df["check_in_dt"] = pd.to_datetime(pd.Series([pd.NaT] * len(df)))
+    if "check_out" in df.columns:
+        df["check_out_dt"] = pd.to_datetime(df["check_out"], format="%d/%m/%Y", errors="coerce")
+    else:
+        df["check_out_dt"] = pd.to_datetime(pd.Series([pd.NaT] * len(df)))
+    return df
+
 # --- Upload section ----------------------------------------------------------
 st.markdown("### 📁 Upload Guest & Room Lists")
 upload_col1, upload_col2 = st.columns(2)
@@ -129,14 +149,9 @@ toggle_label = "🔄 Switch to Range View" if not st.session_state["range_mode"]
 if st.button(toggle_label):
     st.session_state["range_mode"] = not st.session_state["range_mode"]
 
-assigned_df = st.session_state.get("assigned", pd.DataFrame()).copy()
-unassigned_df = st.session_state.get("unassigned", pd.DataFrame()).copy()
-
-# Add datetime columns
-for df in [assigned_df, unassigned_df]:
-    if not df.empty and "check_in" in df.columns:
-        df["check_in_dt"] = pd.to_datetime(df["check_in"], format="%d/%m/%Y", errors="coerce")
-        df["check_out_dt"] = pd.to_datetime(df["check_out"], format="%d/%m/%Y", errors="coerce")
+# Prepare dataframes with guaranteed datetime columns
+assigned_df = with_dt_cols(st.session_state.get("assigned", pd.DataFrame()))
+unassigned_df = with_dt_cols(st.session_state.get("unassigned", pd.DataFrame()))
 
 if st.session_state["range_mode"]:
     col1, col2 = st.columns(2)
