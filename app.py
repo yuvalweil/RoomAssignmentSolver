@@ -75,14 +75,14 @@ if st.button(toggle_label, key="toggle_button"):
 assigned_df = st.session_state.get("assigned", pd.DataFrame())
 unassigned_df = st.session_state.get("unassigned", pd.DataFrame())
 
-# Parse dates
-if not assigned_df.empty:
-    assigned_df["check_in_dt"] = pd.to_datetime(assigned_df["check_in"], format="%d/%m/%Y")
-    assigned_df["check_out_dt"] = pd.to_datetime(assigned_df["check_out"], format="%d/%m/%Y")
+# Safe date parsing
+if "check_in" in assigned_df.columns:
+    assigned_df["check_in_dt"] = pd.to_datetime(assigned_df["check_in"], format="%d/%m/%Y", errors="coerce")
+    assigned_df["check_out_dt"] = pd.to_datetime(assigned_df["check_out"], format="%d/%m/%Y", errors="coerce")
 
-if not unassigned_df.empty:
-    unassigned_df["check_in_dt"] = pd.to_datetime(unassigned_df["check_in"], format="%d/%m/%Y")
-    unassigned_df["check_out_dt"] = pd.to_datetime(unassigned_df["check_out"], format="%d/%m/%Y")
+if "check_in" in unassigned_df.columns:
+    unassigned_df["check_in_dt"] = pd.to_datetime(unassigned_df["check_in"], format="%d/%m/%Y", errors="coerce")
+    unassigned_df["check_out_dt"] = pd.to_datetime(unassigned_df["check_out"], format="%d/%m/%Y", errors="coerce")
 
 # Filter by selected date or range
 if st.session_state["range_mode"]:
