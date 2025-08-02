@@ -8,113 +8,109 @@ def is_available(room, check_in_str, check_out_str):
     check_out = dt.strptime(check_out_str, "%d/%m/%Y")
     if room not in room_calendars:
         return True
-    for (start, end) in room_calendars[room]:
-        if not (check_out <= start or check_in >= end):
-            return False
-    return True
+    return all(check_out <= start or check_in >= end for start, end in room_calendars[room])
 
 def reserve(room, check_in_str, check_out_str):
     check_in = dt.strptime(check_in_str, "%d/%m/%Y")
     check_out = dt.strptime(check_out_str, "%d/%m/%Y")
-    if room not in room_calendars:
-        room_calendars[room] = []
-    room_calendars[room].append((check_in, check_out))
+    room_calendars.setdefault(room, []).append((check_in, check_out))
 
-def assign_rooms(families_df, rooms_df, log_func=print):
+def assign_rooms(families_df, rooms_df):
     global room_calendars
     room_calendars = {}
-    assigned = []
-    unassigned = []
+
+    assigned, unassigned = [], []
 
     rooms_by_type = rooms_df.groupby("room_type")["room"].apply(lambda x: sorted(x)).to_dict()
     families_df["forced_room"] = families_df.get("forced_room", "").fillna("")
 
-    forced_rows = families_df[families_df["forced_room"].str.strip() != ""]
-    processed_families = set()
+    # Group families for prioritization
+    families_df["has_forced"] = families_df["forced_room"].str.strip() != ""
+    forced_families = families_df[families_df["has_forced"]]["full_name"].unique()
+    other_families = families_df[~families_df["full_name"].isin(forced_families)]["full_name"].unique()
 
-    for _, row in forced_rows.iterrows():
-        family = row["full_name"] if "full_name" in row else row["שם מלא"]
-        if family in processed_families:
-            continue
-        group = families_df[families_df["full_name" if "full_name" in families_df.columns else "שם מלא"] == family]
-        log_func(f"🔒 Attempting forced assignment for {family}...")
+    all_families_ordered = list(forced_families) + list(other_families)
 
-        success = try_assign_family(group, rooms_by_type, assigned, unassigned, forced_room=row["forced_room"], log_func=log_func)
-        if not success:
-            log_func(f"⚠️ Could not honor forced_room {row['forced_room']} for {family}.")
-        processed_families.add(family)
+    for family in all_families_ordered:
+        group = families_df[families_df["full_name"] == family].copy()
+        group = group.sort_values(by="check_in")
+        grouped_by_type = group.groupby("room_type")
 
-    for family, group in families_df.groupby("full_name" if "full_name" in families_df.columns else "שם מלא"):
-        if family in processed_families:
-            continue
-        log_func(f"➡️ Assigning {family} (no forced room)...")
-        try_assign_family(group, rooms_by_type, assigned, unassigned, forced_room=None, log_func=log_func)
+        for room_type, orders in grouped_by_type:
+            orders = orders.sort_values(by="check_in")
 
-    return pd.DataFrame(assigned), pd.DataFrame(unassigned)
+            # 1. Try to assign forced_room rows first
+            forced_rows = orders[orders["forced_room"].str.strip() != ""]
+            normal_rows = orders[orders["forced_room"].str.strip() == ""]
 
-def try_assign_family(group, rooms_by_type, assigned, unassigned, forced_room=None, log_func=print):
-    family = group["full_name"].iloc[0] if "full_name" in group else group["שם מלא"]
-    group = group.sort_values(by="check_in")
-    grouped_by_type = group.groupby("room_type")
-
-    success = True
-
-    for room_type, orders in grouped_by_type:
-        available_rooms = rooms_by_type.get(room_type, [])
-
-        # Filter forced room if specified
-        if forced_room:
-            if forced_room not in available_rooms:
-                log_func(f"❌ Forced room {forced_room} not found in room_type {room_type}")
-                success = False
-                unassigned.extend(orders.to_dict(orient="records"))
-                continue
-            start_index = available_rooms.index(forced_room)
-            candidates = available_rooms[start_index : start_index + len(orders)]
-        else:
-            candidates = available_rooms
-
-        # Try to assign consecutive rooms
-        found_block = False
-        for i in range(len(candidates) - len(orders) + 1):
-            block = candidates[i : i + len(orders)]
-            if all(is_available(block[j], row["check_in"], row["check_out"]) for j, (_, row) in enumerate(orders.iterrows())):
-                for j, (_, row) in enumerate(orders.iterrows()):
-                    reserve(block[j], row["check_in"], row["check_out"])
+            skip_entire_group = False
+            for _, row in forced_rows.iterrows():
+                room = row["forced_room"].strip()
+                if room not in rooms_by_type.get(room_type, []):
+                    unassigned.append(row.to_dict())
+                    skip_entire_group = True
+                    break
+                if is_available(room, row["check_in"], row["check_out"]):
                     assigned.append({
                         "family": family,
-                        "room": block[j],
+                        "room": room,
                         "room_type": room_type,
                         "check_in": row["check_in"],
                         "check_out": row["check_out"],
-                        "forced_room": row.get("forced_room", "")
+                        "forced_room": room
                     })
-                    log_func(f"✅ Assigned {family} to {block[j]}")
-                found_block = True
-                break
+                    reserve(room, row["check_in"], row["check_out"])
+                else:
+                    unassigned.append(row.to_dict())
+                    skip_entire_group = True
+                    break
+            if skip_entire_group:
+                for _, row in normal_rows.iterrows():
+                    unassigned.append(row.to_dict())
+                continue
 
-        if not found_block:
-            log_func(f"⚠️ No consecutive rooms available for {family} ({room_type})")
-            # Try to assign any available rooms
-            for _, row in orders.iterrows():
-                assigned_room = None
-                for room in available_rooms:
-                    if is_available(room, row["check_in"], row["check_out"]):
-                        reserve(room, row["check_in"], row["check_out"])
-                        assigned_room = room
+            # 2. Try serial room block
+            available_rooms = [r for r in rooms_by_type.get(room_type, []) if all(
+                is_available(r, row["check_in"], row["check_out"]) for _, row in normal_rows.iterrows()
+            )]
+
+            block_found = False
+            for i in range(len(available_rooms) - len(normal_rows) + 1):
+                block = available_rooms[i:i+len(normal_rows)]
+                if all(is_available(block[j], row["check_in"], row["check_out"])
+                       for j, (_, row) in enumerate(normal_rows.iterrows())):
+                    for j, (_, row) in enumerate(normal_rows.iterrows()):
                         assigned.append({
                             "family": family,
-                            "room": room,
+                            "room": block[j],
                             "room_type": room_type,
                             "check_in": row["check_in"],
                             "check_out": row["check_out"],
-                            "forced_room": row.get("forced_room", "")
+                            "forced_room": ""
                         })
-                        log_func(f"✅ Fallback assignment: {family} to {room}")
-                        break
-                if not assigned_room:
-                    unassigned.append(row.to_dict())
-                    log_func(f"❌ Could not assign room for {family} - {row['room_type']}")
-                    success = False
+                        reserve(block[j], row["check_in"], row["check_out"])
+                    block_found = True
+                    break
 
-    return success
+            # 3. Fallback to any room
+            if not block_found:
+                for _, row in normal_rows.iterrows():
+                    room_found = None
+                    for room in rooms_by_type.get(room_type, []):
+                        if is_available(room, row["check_in"], row["check_out"]):
+                            room_found = room
+                            break
+                    if room_found:
+                        assigned.append({
+                            "family": family,
+                            "room": room_found,
+                            "room_type": room_type,
+                            "check_in": row["check_in"],
+                            "check_out": row["check_out"],
+                            "forced_room": ""
+                        })
+                        reserve(room_found, row["check_in"], row["check_out"])
+                    else:
+                        unassigned.append(row.to_dict())
+
+    return pd.DataFrame(assigned), pd.DataFrame(unassigned)
