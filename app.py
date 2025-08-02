@@ -70,25 +70,28 @@ with col2:
         st.subheader("⚠️ Unassigned Families (All)")
         st.dataframe(st.session_state["unassigned"], use_container_width=True)
 
-# ================================
-# SECTION 2: Filtered by Date View
-# ================================
+# ========================
+# SECTION 2: Filter by Date or Range
+# ========================
 st.markdown("---")
 st.markdown("## 📅 View Assignments for Date or Range")
 
-# Toggle between single and range mode
+# Initialize mode
 if "range_mode" not in st.session_state:
     st.session_state["range_mode"] = False
 
-toggle_label = "🔄 Switch to Range View" if not st.session_state["range_mode"] else "🔄 Switch to Single Date View"
-if st.button(toggle_label):
-    st.session_state["range_mode"] = not st.session_state["range_mode"]
+# Toggle UI
+with st.container():
+    st.markdown("### 🔀 Choose View Mode")
+    toggle_label = "🔄 Switch to Range View" if not st.session_state["range_mode"] else "🔄 Switch to Single Date View"
+    if st.button(toggle_label, key="toggle_button"):
+        st.session_state["range_mode"] = not st.session_state["range_mode"]
 
+# Proceed if we have data
 assigned_df = st.session_state.get("assigned", pd.DataFrame())
 unassigned_df = st.session_state.get("unassigned", pd.DataFrame())
 
 if not assigned_df.empty and not unassigned_df.empty:
-
     # Convert date columns
     assigned_df["check_in_dt"] = pd.to_datetime(assigned_df["check_in"], format="%d/%m/%Y")
     assigned_df["check_out_dt"] = pd.to_datetime(assigned_df["check_out"], format="%d/%m/%Y")
