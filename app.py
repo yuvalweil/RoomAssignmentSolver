@@ -6,9 +6,20 @@ from logic import assign_rooms
 st.set_page_config(page_title="Room Assignment", layout="wide")
 st.title("🏕️ Room Assignment System")
 
-# Upload CSVs
-fam_file = st.file_uploader("👨‍👩‍👧 Upload Families CSV", type="csv")
-room_file = st.file_uploader("🏠 Upload Rooms CSV", type="csv")
+# ================
+# UPLOAD SECTION
+# ================
+st.markdown("### 📁 Upload Guest & Room Lists")
+
+upload_col1, upload_col2 = st.columns(2)
+
+with upload_col1:
+    fam_file = st.file_uploader("👨‍👩‍👧 Families CSV", type="csv", label_visibility="collapsed")
+    st.markdown("*👨‍👩‍👧 Families*", help="Upload your families.csv file")
+
+with upload_col2:
+    room_file = st.file_uploader("🏠 Rooms CSV", type="csv", label_visibility="collapsed")
+    st.markdown("*🏠 Rooms*", help="Upload your rooms.csv file")
 
 # Load uploaded data
 if fam_file:
