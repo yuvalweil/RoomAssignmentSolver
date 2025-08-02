@@ -6,18 +6,18 @@ from logic import assign_rooms
 st.set_page_config(page_title="Room Assignment", layout="wide")
 st.title("🏕️ Room Assignment System")
 
-# Upload CSV files
+# Upload CSVs
 fam_file = st.file_uploader("👨‍👩‍👧 Upload Families CSV", type="csv")
 room_file = st.file_uploader("🏠 Upload Rooms CSV", type="csv")
 
-# Load uploaded files
+# Load uploaded data
 if fam_file:
     st.session_state["families"] = pd.read_csv(fam_file)
 
 if room_file:
     st.session_state["rooms"] = pd.read_csv(room_file)
 
-# Run assignment and save results
+# Run assignment
 def run_assignment():
     try:
         assigned_df, unassigned_df = assign_rooms(
@@ -28,48 +28,55 @@ def run_assignment():
         st.session_state["unassigned"] = unassigned_df
         st.success("✅ Room assignment completed.")
     except Exception as e:
-        st.error(f"❌ Error during assignment: {e}")
+        st.error(f"❌ Assignment error: {e}")
 
-# Auto-run if both CSVs exist and assignment not done
+# Auto-run
 if "assigned" not in st.session_state and "families" in st.session_state and "rooms" in st.session_state:
     run_assignment()
 
-# Manual rerun
+# Recalculate manually
 if "families" in st.session_state and "rooms" in st.session_state:
     if st.button("🔁 Recalculate Assignment"):
         run_assignment()
 
-# Show assignment results
+# ========================
+# SECTION 1: All Data View
+# ========================
+st.markdown("## 📋 Full Assignment Overview")
+
+col1, col2 = st.columns(2)
+
+with col1:
+    if "assigned" in st.session_state:
+        st.subheader("✅ Assigned Families (All)")
+        st.dataframe(st.session_state["assigned"], use_container_width=True)
+
+        csv = st.session_state["assigned"].to_csv(index=False).encode("utf-8")
+        st.download_button("📥 Download Assigned", csv, "assigned_families.csv", "text/csv")
+
+with col2:
+    if "unassigned" in st.session_state and not st.session_state["unassigned"].empty:
+        st.subheader("⚠️ Unassigned Families (All)")
+        st.dataframe(st.session_state["unassigned"], use_container_width=True)
+
+# ========================
+# SECTION 2: Filter by Date
+# ========================
+st.markdown("---")
+st.markdown("## 📅 View Assignments for Specific Date")
+
 if "assigned" in st.session_state:
-    st.subheader("✅ Assigned Families")
-    st.dataframe(st.session_state["assigned"], use_container_width=True)
-
-    # Download assigned
-    csv = st.session_state["assigned"].to_csv(index=False).encode("utf-8")
-    st.download_button("📥 Download Assigned Families", csv, "assigned_families.csv", "text/csv")
-
-    # 📅 Filter by date
-    st.subheader("📅 View Assignments for Specific Date")
     selected_date = st.date_input("Select a date", format="DD/MM/YYYY")
 
-    # Convert check-in/out to datetime
     df = st.session_state["assigned"].copy()
     df["check_in_dt"] = pd.to_datetime(df["check_in"], format="%d/%m/%Y")
     df["check_out_dt"] = pd.to_datetime(df["check_out"], format="%d/%m/%Y")
-
-    # Convert selected date to datetime for comparison
     selected_datetime = dt.combine(selected_date, time.min)
 
-    # Filter rows where selected date falls within check-in/check-out
     filtered_df = df[(selected_datetime >= df["check_in_dt"]) & (selected_datetime < df["check_out_dt"])]
 
     if not filtered_df.empty:
         st.success(f"✅ {len(filtered_df)} assignments found on {selected_date.strftime('%d/%m/%Y')}")
         st.dataframe(filtered_df[["family", "room", "check_in", "check_out"]], use_container_width=True)
     else:
-        st.warning("📭 No assignments for that date.")
-
-# Show unassigned families
-if "unassigned" in st.session_state and not st.session_state["unassigned"].empty:
-    st.subheader("⚠️ Unassigned Families")
-    st.dataframe(st.session_state["unassigned"], use_container_width=True)
+        st.info("📭 No assignments for that date.")
