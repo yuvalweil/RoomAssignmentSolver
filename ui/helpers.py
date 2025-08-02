@@ -97,7 +97,7 @@ def apply_filters(df: pd.DataFrame,
         out = out[out["room_type"].astype(str).str.contains(rt_q.strip(), case=False, na=False)]
     return out
 
-# ----------------- (Daily Operations Sheet) helpers -----------------
+# ----------------- Daily Operations Sheet helpers -----------------
 
 def _first_col(df: pd.DataFrame, *candidates: str) -> str | None:
     for c in candidates:
@@ -127,13 +127,12 @@ def _truthy_to_check(val) -> str:
     if s in {"1", "true", "yes", "y", "✓", "v", "✔"}:
         return "✓"
     try:
-        # numeric > 0 also counts as ✓ (but we don't show the number here)
         return "✓" if float(s) > 0 else ""
     except Exception:
         return ""
 
 def build_day_sheet_sections(
-    assigned_df: pd.DataFrame,
+    assigned_df: pd.DataFrame | None,
     families_df: pd.DataFrame,
     rooms_df: pd.DataFrame,
     on_date: dt,
@@ -142,28 +141,34 @@ def build_day_sheet_sections(
     """
     Returns a dict: {section_title: [rows...]}, each row has:
       unit, name, people, nights, extra, breakfast, paid, charge, notes
-    where keys map to the Hebrew header order you want.
+
+    Data sources:
+      • EVERY value comes from families.csv & rooms.csv only.
+      • 'unit' is taken from *assigned_df* if available; otherwise uses families.forced_room if present.
+      • 'nights' is derived from families.check_in/check_out.
     """
-    if assigned_df is None:
-        assigned_df = pd.DataFrame()
     if families_df is None:
         families_df = pd.DataFrame()
     if rooms_df is None:
         rooms_df = pd.DataFrame()
 
-    # Normalize assignment frame
-    a = assigned_df.copy()
-    a["room_type"] = a.get("room_type", "").astype(str).str.strip()
-    a["room"]      = a.get("room", "").astype(str).str.strip()
-    a["family"]    = a.get("family", "").astype(str).str.strip()
-
-    # Families: provide name and optional info
+    # Start with families: one row per booking
     f = families_df.copy()
+
+    # Normalize family name
     if "family" not in f.columns:
         alt = _first_col(f, "full_name", "שם מלא")
         f["family"] = f[alt].astype(str).str.strip() if alt else ""
 
-    # Map optional columns (Hebrew/English)
+    # Normalize key fields
+    for c in ["room_type", "check_in", "check_out"]:
+        if c not in f.columns:
+            f[c] = ""
+
+    f["room_type"] = f["room_type"].astype(str).str.strip()
+    f["family"]    = f["family"].astype(str).str.strip()
+
+    # Optional columns mapping (Hebrew/English)
     people_col    = _first_col(f, "people", "אנשים")
     extras_col    = _first_col(f, "extras", "extra", "תוספת")
     breakfast_col = _first_col(f, "breakfast", "א.בוקר")
@@ -171,23 +176,29 @@ def build_day_sheet_sections(
     charge_col    = _first_col(f, "charge", "לחיוב")
     notes_col     = _first_col(f, "notes", "הערות")
     crib_col      = _first_col(f, "crib", "לול")
+    forced_col    = _first_col(f, "forced_room", "חדר מוכתב", "חדר_מוכתב")
 
-    # Merge assignment with families on keys
-    merge_keys = ["family", "room_type", "check_in", "check_out"]
-    for k in merge_keys:
-        if k not in a.columns and k in f.columns:
-            a[k] = f[k]
-    cols_to_take = [c for c in [people_col, extras_col, breakfast_col, paid_col, charge_col, notes_col, crib_col] if c]
-    on_f = f[[c for c in f.columns if c in merge_keys + cols_to_take]].copy()
-    merged = pd.merge(a, on_f, on=merge_keys, how="left")
-
-    # Active rows for the selected date
+    # Date filter: rows active on the selected date
     d = pd.to_datetime(on_date.date())
-    merged["ci_dt"] = pd.to_datetime(merged["check_in"],  format="%d/%m/%Y", errors="coerce")
-    merged["co_dt"] = pd.to_datetime(merged["check_out"], format="%d/%m/%Y", errors="coerce")
-    active = merged[(merged["ci_dt"] <= d) & (merged["co_dt"] > d)].copy()
+    f["ci_dt"] = pd.to_datetime(f["check_in"],  format="%d/%m/%Y", errors="coerce")
+    f["co_dt"] = pd.to_datetime(f["check_out"], format="%d/%m/%Y", errors="coerce")
+    active = f[(f["ci_dt"] <= d) & (f["co_dt"] > d)].copy()
 
-    # Section mapping similar to your doc
+    # If we have an assigned_df, use it for unit; else fall back to forced_room
+    assigned_units = {}
+    if isinstance(assigned_df, pd.DataFrame) and not assigned_df.empty:
+        a = assigned_df.copy()
+        # keys to map a unique booking row: family + room_type + dates
+        for _, r in a.iterrows():
+            key = (
+                str(r.get("family", "")).strip(),
+                str(r.get("room_type", "")).strip(),
+                str(r.get("check_in", "")).strip(),
+                str(r.get("check_out", "")).strip(),
+            )
+            assigned_units[key] = str(r.get("room", "")).strip()
+
+    # Section mapping
     def section_for(rt: str) -> str:
         s = (rt or "").lower()
         if any(k in s for k in ["זוג", "double", "couple"]) or "בקת" in s or "cabin" in s:
@@ -204,17 +215,28 @@ def build_day_sheet_sections(
             return "מתחם משפחתי"
         return "אחר"
 
-    # Catalog of all units for empty rows
+    # Catalog of all units to optionally show empty rows as well
     room_catalog = rooms_df.copy()
-    room_catalog["room_type"] = room_catalog.get("room_type", "").astype(str).str.strip()
-    room_catalog["room"]      = room_catalog.get("room", "").astype(str).str.strip()
-    room_catalog["__section"] = room_catalog["room_type"].map(section_for)
+    if not room_catalog.empty:
+        room_catalog["room_type"] = room_catalog.get("room_type", "").astype(str).str.strip()
+        room_catalog["room"]      = room_catalog.get("room", "").astype(str).str.strip()
+        room_catalog["__section"] = room_catalog["room_type"].map(section_for)
 
-    # Build filled rows
+    # Build rows purely from families + (assigned OR forced_room)
     active["__section"] = active["room_type"].map(section_for)
     out: dict[str, list[dict]] = {}
-    for _, row in active.sort_values(["__section", "room"]).iterrows():
-        # base values
+
+    for _, row in active.sort_values(["__section", "room_type", "family"]).iterrows():
+        key = (
+            str(row.get("family", "")).strip(),
+            str(row.get("room_type", "")).strip(),
+            str(row.get("check_in", "")).strip(),
+            str(row.get("check_out", "")).strip(),
+        )
+        unit = assigned_units.get(key, "")
+        if not unit and forced_col:
+            unit = str(row.get(forced_col, "")).strip()
+
         name = row.get("family", "")
         people = "" if not people_col else row.get(people_col, "")
         extra  = "" if not extras_col else row.get(extras_col, "")
@@ -222,12 +244,13 @@ def build_day_sheet_sections(
         paid   = "" if not paid_col else row.get(paid_col, "")
         charge = "" if not charge_col else row.get(charge_col, "")
         notes  = "" if not notes_col else str(row.get(notes_col, "")).strip()
-        # append crib into notes if truthy
+
+        # (Optional) Add crib into notes. Remove this if you don't want it appended.
         if crib_col and str(row.get(crib_col, "")).strip().lower() in {"1", "true", "yes", "y"}:
             notes = ("לול" if not notes else f"לול | {notes}")
 
         out.setdefault(row["__section"], []).append({
-            "unit": row["room"],
+            "unit": unit,
             "name": name,
             "people": people,
             "nights": night_progress_str(row["check_in"], row["check_out"], on_date),
@@ -238,23 +261,22 @@ def build_day_sheet_sections(
             "notes": notes,
         })
 
-    # Add empty units not occupied
+    # Add empty units (from rooms.csv) that are not used by any active row
     if include_empty_units and not room_catalog.empty:
-        filled_keys = {(sec, r["unit"]) for sec, rows in out.items() for r in rows}
+        used = {(sec, r["unit"]) for sec, rows in out.items() for r in rows if r.get("unit")}
         for _, rr in room_catalog.sort_values(["__section", "room"]).iterrows():
-            key = (rr["__section"], rr["room"])
-            if key not in filled_keys:
+            key2 = (rr["__section"], rr["room"])
+            if key2 not in used:
                 out.setdefault(rr["__section"], []).append({
                     "unit": rr["room"], "name": "", "people": "", "nights": "",
                     "extra": "", "breakfast": "", "paid": "", "charge": "", "notes": ""
                 })
 
     order = ["זוגי+בקתות", "DYurt", "מתחם קבוצתי", "סככות", "מתחם שטח", "מתחם משפחתי", "אחר"]
-    # keep sections present; if include_empty_units=True, include also empty sections in order
     return {sec: out.get(sec, []) for sec in order if (sec in out) or include_empty_units}
 
 def daily_sheet_html(sections: dict[str, list[dict]], on_date: dt) -> str:
-    """Return printable HTML with headers: יחידה, שם, אנשים, לילות, תוספת, א.בוקר, שולם, לחיוב, הערות."""
+    """Printable HTML with headers: יחידה, שם, אנשים, לילות, תוספת, א.בוקר, שולם, לחיוב, הערות."""
     date_str = on_date.strftime("%d/%m/%Y")
     def esc(x): return html.escape(str(x) if x is not None else "")
     parts = [
