@@ -114,4 +114,12 @@ if "assigned" in st.session_state and "unassigned" in st.session_state:
         # Show results
         st.subheader(f"✅ Assigned Families from {start_date.strftime('%d/%m/%Y')} to {end_date.strftime('%d/%m/%Y')}")
         if not assigned_filtered.empty:
-            st.da
+            st.dataframe(assigned_filtered[["family", "room", "check_in", "check_out"]], use_container_width=True)
+        else:
+            st.info("📭 No assigned families in that range.")
+
+        st.subheader(f"⚠️ Unassigned Families from {start_date.strftime('%d/%m/%Y')} to {end_date.strftime('%d/%m/%Y')}")
+        if not unassigned_filtered.empty:
+            st.dataframe(unassigned_filtered[["id", "people", "check_in", "check_out", "room_type"]], use_container_width=True)
+        else:
+            st.info("📭 No unassigned families in that range.")
