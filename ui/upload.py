@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
-from .helpers import read_csv, run_assignment
+from .helpers import read_csv
+from .runner import run_assignment
 
 def render_uploads():
     st.markdown("### 📁 Upload Guest & Room Lists")
