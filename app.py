@@ -96,7 +96,14 @@ def _is_empty_opt(val):
 def highlight_forced(row):
     return ["background-color: #fff9c4"] * len(row) if not _is_empty_opt(row.get("forced_room", "")) else [""] * len(row)
 
-# --- NEW: Family + Room-Type filter helpers ----------------------------------
+# --- NEW: safe unique list helper --------------------------------------------
+def _unique_values(df: pd.DataFrame, col: str) -> list[str]:
+    """Return sorted unique values for a column if it exists, else an empty list."""
+    if df is None or df.empty or col not in df.columns:
+        return []
+    return sorted(df[col].astype(str).unique())
+
+# --- Family + Room-Type filter helpers ---------------------------------------
 def _family_filters_ui(names, key_prefix: str):
     c1, c2 = st.columns([2, 1])
     with c1:
@@ -121,14 +128,14 @@ def _apply_filters(df: pd.DataFrame,
         return df
 
     out = df
-    if fam_sel:
+    if fam_sel and "family" in out.columns:
         out = out[out["family"].astype(str).isin(fam_sel)]
-    if fam_q and fam_q.strip():
+    if fam_q and fam_q.strip() and "family" in out.columns:
         out = out[out["family"].astype(str).str.contains(fam_q.strip(), case=False, na=False)]
 
-    if rt_sel:
+    if rt_sel and "room_type" in out.columns:
         out = out[out["room_type"].astype(str).isin(rt_sel)]
-    if rt_q and rt_q.strip():
+    if rt_q and rt_q.strip() and "room_type" in out.columns:
         out = out[out["room_type"].astype(str).str.contains(rt_q.strip(), case=False, na=False)]
 
     return out
@@ -173,12 +180,12 @@ with col1:
     if not st.session_state["assigned"].empty:
         st.subheader("✅ Assigned Families (All)")
 
-        # NEW: combined family + room_type filters
-        all_families = sorted(st.session_state["assigned"]["family"].astype(str).unique())
-        all_types = sorted(st.session_state["assigned"]["room_type"].astype(str).unique())
+        # Combined family + room_type filters
+        all_families = _unique_values(st.session_state["assigned"], "family")
+        all_types    = _unique_values(st.session_state["assigned"], "room_type")
 
         fam_sel_all, fam_q_all = _family_filters_ui(all_families, key_prefix="all")
-        rt_sel_all, rt_q_all = _roomtype_filters_ui(all_types, key_prefix="all")
+        rt_sel_all,  rt_q_all  = _roomtype_filters_ui(all_types,   key_prefix="all")
 
         assigned_all_view = _apply_filters(
             st.session_state["assigned"],
@@ -236,9 +243,9 @@ if st.session_state["range_mode"]:
             (unassigned_df["check_in_dt"] < end_dt) & (unassigned_df["check_out_dt"] > start_dt)
         ]
 
-        # NEW: family + room_type filters for the range subset
-        range_fams  = sorted(assigned_filtered["family"].astype(str).unique())
-        range_types = sorted(assigned_filtered["room_type"].astype(str).unique())
+        # Family + room_type filters for the range subset (SAFE unique lists)
+        range_fams  = _unique_values(assigned_filtered, "family")
+        range_types = _unique_values(assigned_filtered, "room_type")
 
         fam_sel_r, fam_q_r = _family_filters_ui(range_fams,  key_prefix="range")
         rt_sel_r,  rt_q_r  = _roomtype_filters_ui(range_types, key_prefix="range")
@@ -279,9 +286,9 @@ else:
         (unassigned_df["check_in_dt"] <= selected_dt) & (unassigned_df["check_out_dt"] > selected_dt)
     ]
 
-    # NEW: family + room_type filters for the single-date subset
-    date_fams  = sorted(assigned_filtered["family"].astype(str).unique())
-    date_types = sorted(assigned_filtered["room_type"].astype(str).unique())
+    # Family + room_type filters for the single-date subset (SAFE unique lists)
+    date_fams  = _unique_values(assigned_filtered, "family")
+    date_types = _unique_values(assigned_filtered, "room_type")
 
     fam_sel_d, fam_q_d = _family_filters_ui(date_fams,  key_prefix="date")
     rt_sel_d,  rt_q_d  = _roomtype_filters_ui(date_types, key_prefix="date")
