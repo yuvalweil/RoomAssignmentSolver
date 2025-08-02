@@ -241,18 +241,19 @@ def assign_rooms(
 # Keep backward compatibility with older core.py call-sites
 def assign_per_type(families_arg, rooms_arg, *args, **kwargs):
     """
-    Older call-sites pass  (families, rooms, maybe_other, log_func).
-    • We coerce *anything* that isn't already a DataFrame into one.
-    • We treat the *last callable* (positional or keyword) as log_func.
-    • Extra positional args that aren't callables are ignored.
+    Older call-sites pass (families, rooms, maybe_other, log_func) and
+    expect THREE return values. We:
+      • Coerce inputs to DataFrames (handles lists/dicts too).
+      • Detect the last callable among *args/**kwargs as log_func.
+      • Return (assigned_df, unassigned_df, meta) where meta is a placeholder.
     """
     import pandas as pd
 
-    # 1) Coerce first two args to DataFrames if needed
+    # 1) Coerce inputs to DataFrames
     families_df = families_arg if isinstance(families_arg, pd.DataFrame) else pd.DataFrame(families_arg)
     rooms_df    = rooms_arg    if isinstance(rooms_arg,    pd.DataFrame) else pd.DataFrame(rooms_arg)
 
-    # 2) Detect a logger among *args or **kwargs
+    # 2) Extract a logger if provided positionally/keyword
     log_func = kwargs.get("log_func", None)
     for a in reversed(args):
         if callable(a):
@@ -260,7 +261,11 @@ def assign_per_type(families_arg, rooms_arg, *args, **kwargs):
             break
 
     # 3) Delegate to the modern solver
-    return assign_rooms(families_df, rooms_df, log_func=log_func)
+    assigned_df, unassigned_df = assign_rooms(families_df, rooms_df, log_func=log_func)
+
+    # 4) Return a 3-tuple for legacy callers (meta placeholder = None)
+    meta = None
+    return assigned_df, unassigned_df, meta
 
 # --- Backtracking search -----------------------------------------------------
 def _search_assignments(
