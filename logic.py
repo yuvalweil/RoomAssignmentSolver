@@ -19,8 +19,9 @@ def assign_rooms(families_df, rooms_df):
     assignments = []
 
     for _, fam in families_df.iterrows():
-        check_in = datetime.strptime(fam["check_in"], "%Y-%m-%d")
-        check_out = datetime.strptime(fam["check_out"], "%Y-%m-%d")
+        # Parse dates in dd/mm/yyyy format
+        check_in = datetime.strptime(fam["check_in"], "%d/%m/%Y")
+        check_out = datetime.strptime(fam["check_out"], "%d/%m/%Y")
 
         for room_id, room in rooms.items():
             if (room_id not in assigned_rooms and
