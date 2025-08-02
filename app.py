@@ -1,156 +1,98 @@
 import streamlit as st
 import pandas as pd
-from datetime import datetime as dt, time
 from logic import assign_rooms
+from datetime import datetime
 
 st.set_page_config(page_title="Room Assignment", layout="wide")
-st.title("🏕️ Room Assignment System")
 
-# Upload section
-st.markdown("### 📁 Upload Guest & Room Lists")
-upload_col1, upload_col2 = st.columns(2)
+# --- Functions ---
 
-with upload_col1:
-    fam_file = st.file_uploader("👨‍👩‍👧 Families CSV", type="csv", label_visibility="collapsed")
-    st.markdown("*👨‍👩‍👧 Families*", help="Upload your families.csv file")
-
-with upload_col2:
-    room_file = st.file_uploader("🏠 Rooms CSV", type="csv", label_visibility="collapsed")
-    st.markdown("*🏠 Rooms*", help="Upload your rooms.csv file")
-
-if fam_file:
-    st.session_state["families"] = pd.read_csv(fam_file)
-
-if room_file:
-    st.session_state["rooms"] = pd.read_csv(room_file)
-
-# Run assignment logic
-def run_assignment():
-    try:
-        assigned_df, unassigned_df = assign_rooms(
-            st.session_state["families"],
-            st.session_state["rooms"]
-        )
-        st.session_state["assigned"] = assigned_df
-        st.session_state["unassigned"] = unassigned_df
-        st.success("✅ Room assignment completed.")
-    except Exception as e:
-        st.error(f"❌ Assignment error: {e}")
-
-if "assigned" not in st.session_state and "families" in st.session_state and "rooms" in st.session_state:
-    run_assignment()
-
-if "families" in st.session_state and "rooms" in st.session_state:
-    if st.button("🔁 Recalculate Assignment"):
-        run_assignment()
-
-# Highlight function for forced_room rows
 def highlight_forced(row):
-    if pd.notna(row.get("forced_room")) and str(row["forced_room"]).strip():
-        return ["background-color: #fff9c4"] * len(row)
+    if pd.notna(row.get("forced_room", None)):
+        return ["background-color: lightcoral"] * len(row)
     return [""] * len(row)
 
-# Show full assignments
-st.markdown("## 📋 Full Assignment Overview")
+def load_csv(name, key):
+    uploaded = st.file_uploader(f"Upload {name} CSV", type=["csv"], key=key)
+    if uploaded:
+        df = pd.read_csv(uploaded)
+        st.session_state[name] = df
+        st.success(f"{name} CSV loaded.")
+        return df
+    return st.session_state.get(name)
+
+def filter_by_date(df, col_checkin, col_checkout, selected, mode):
+    if df is None:
+        return None
+    if mode == "Single Date":
+        return df[(df[col_checkin] <= selected) & (df[col_checkout] >= selected)]
+    else:
+        return df[(df[col_checkout] >= selected[0]) & (df[col_checkin] <= selected[1])]
+
+# --- Load Data ---
+
+if "families" not in st.session_state:
+    st.session_state["families"] = None
+if "rooms" not in st.session_state:
+    st.session_state["rooms"] = None
+if "assigned" not in st.session_state:
+    st.session_state["assigned"] = None
+if "unassigned" not in st.session_state:
+    st.session_state["unassigned"] = None
+
+st.title("🏕️ Room Assignment Tool")
+
 col1, col2 = st.columns(2)
-
 with col1:
-    if "assigned" in st.session_state:
-        st.subheader("✅ Assigned Families (All)")
-        styled_df = st.session_state["assigned"][["family", "room", "room_type", "check_in", "check_out", "forced_room"]].style.apply(highlight_forced, axis=1)
-        st.write(styled_df)
-        csv = st.session_state["assigned"].to_csv(index=False).encode("utf-8")
-        st.download_button("📥 Download Assigned", csv, "assigned_families.csv", "text/csv")
-
+    families_df = load_csv("families", key="fam_csv")
 with col2:
-    if "unassigned" in st.session_state and not st.session_state["unassigned"].empty:
-        st.subheader("⚠️ Unassigned Families (All)")
-        unassigned_display = st.session_state["unassigned"].drop(columns=["id"], errors="ignore")
-        st.dataframe(unassigned_display, use_container_width=True)
+    rooms_df = load_csv("rooms", key="room_csv")
 
-# Toggle between range/single view
-st.markdown("---")
-st.markdown("## 📅 View Assignments for Date or Range")
+# --- Date Filter ---
 
-if "range_mode" not in st.session_state:
-    st.session_state["range_mode"] = False
-
-toggle_label = "🔄 Switch to Range View" if not st.session_state["range_mode"] else "🔄 Switch to Single Date View"
-if st.button(toggle_label, key="toggle_button"):
-    st.session_state["range_mode"] = not st.session_state["range_mode"]
-
-# Get data
-assigned_df = st.session_state.get("assigned", pd.DataFrame())
-unassigned_df = st.session_state.get("unassigned", pd.DataFrame())
-
-# Ensure date columns always exist
-if not assigned_df.empty and "check_in" in assigned_df.columns:
-    assigned_df["check_in_dt"] = pd.to_datetime(assigned_df["check_in"], format="%d/%m/%Y", errors="coerce")
-    assigned_df["check_out_dt"] = pd.to_datetime(assigned_df["check_out"], format="%d/%m/%Y", errors="coerce")
+st.markdown("### Filter Options")
+filter_mode = st.radio("Filter by", ["Single Date", "Date Range"], horizontal=True)
+if filter_mode == "Single Date":
+    selected_date = st.date_input("Select date", value=datetime.today())
 else:
-    assigned_df["check_in_dt"] = pd.NaT
-    assigned_df["check_out_dt"] = pd.NaT
+    selected_date = st.date_input("Select date range", value=(datetime.today(), datetime.today()))
 
-if not unassigned_df.empty and "check_in" in unassigned_df.columns:
-    unassigned_df["check_in_dt"] = pd.to_datetime(unassigned_df["check_in"], format="%d/%m/%Y", errors="coerce")
-    unassigned_df["check_out_dt"] = pd.to_datetime(unassigned_df["check_out"], format="%d/%m/%Y", errors="coerce")
-else:
-    unassigned_df["check_in_dt"] = pd.NaT
-    unassigned_df["check_out_dt"] = pd.NaT
+# --- Assign Rooms Button ---
 
-# Filter by selected date or range
-if st.session_state["range_mode"]:
-    col1, col2 = st.columns(2)
-    with col1:
-        start_date = st.date_input("Start Date", format="DD/MM/YYYY", key="start_date")
-    with col2:
-        end_date = st.date_input("End Date", format="DD/MM/YYYY", key="end_date")
-
-    if start_date > end_date:
-        st.warning("⚠️ End date must be after start date.")
+if st.button("🔄 Assign Rooms"):
+    if families_df is not None and rooms_df is not None:
+        filtered_families = filter_by_date(
+            families_df, "check_in", "check_out", selected_date, filter_mode
+        )
+        assigned, unassigned = assign_rooms(filtered_families, rooms_df)
+        st.session_state["assigned"] = assigned
+        st.session_state["unassigned"] = unassigned
     else:
-        start_dt = dt.combine(start_date, time.min)
-        end_dt = dt.combine(end_date, time.max)
+        st.warning("Please upload both families and rooms CSV files.")
 
-        assigned_filtered = assigned_df[
-            (assigned_df["check_in_dt"] < end_dt) & (assigned_df["check_out_dt"] > start_dt)
-        ]
-        unassigned_filtered = unassigned_df[
-            (unassigned_df["check_in_dt"] < end_dt) & (unassigned_df["check_out_dt"] > start_dt)
-        ]
+# --- Assigned View ---
 
-        st.subheader(f"✅ Assigned Families from {start_date.strftime('%d/%m/%Y')} to {end_date.strftime('%d/%m/%Y')}")
-        if not assigned_filtered.empty:
-            styled = assigned_filtered[["family", "room", "room_type", "check_in", "check_out", "forced_room"]].style.apply(highlight_forced, axis=1)
-            st.write(styled)
-        else:
-            st.info("📭 No assigned families in that range.")
+st.markdown("### ✅ Assigned Families")
+if st.session_state["assigned"] is not None:
+    styled_df = st.session_state["assigned"][
+        ["family", "room", "room_type", "check_in", "check_out", "forced_room"]
+    ].style.apply(highlight_forced, axis=1)
+    st.dataframe(styled_df, use_container_width=True)
+    st.download_button("Download Assigned CSV", st.session_state["assigned"].to_csv(index=False), "assigned.csv")
 
-        st.subheader(f"⚠️ Unassigned Families from {start_date.strftime('%d/%m/%Y')} to {end_date.strftime('%d/%m/%Y')}")
-        if not unassigned_filtered.empty:
-            st.dataframe(unassigned_filtered.drop(columns=["id"], errors="ignore")[["people", "check_in", "check_out", "room_type", "forced_room"]], use_container_width=True)
-        else:
-            st.info("📭 No unassigned families in that range.")
-else:
-    selected_date = st.date_input("Select a date", format="DD/MM/YYYY", key="single_date")
-    selected_dt = dt.combine(selected_date, time.min)
+# --- Unassigned View ---
 
-    assigned_filtered = assigned_df[
-        (assigned_df["check_in_dt"] <= selected_dt) & (assigned_df["check_out_dt"] > selected_dt)
-    ]
-    unassigned_filtered = unassigned_df[
-        (unassigned_df["check_in_dt"] <= selected_dt) & (unassigned_df["check_out_dt"] > selected_dt)
-    ]
+st.markdown("### ❌ Unassigned Families")
+if st.session_state["unassigned"] is not None:
+    st.dataframe(st.session_state["unassigned"][["family", "check_in", "check_out", "forced_room"]], use_container_width=True)
+    st.download_button("Download Unassigned CSV", st.session_state["unassigned"].to_csv(index=False), "unassigned.csv")
 
-    st.subheader(f"✅ Assigned Families on {selected_date.strftime('%d/%m/%Y')}")
-    if not assigned_filtered.empty:
-        styled = assigned_filtered[["family", "room", "room_type", "check_in", "check_out", "forced_room"]].style.apply(highlight_forced, axis=1)
-        st.write(styled)
-    else:
-        st.info("📭 No assigned families on that date.")
+# --- Delete Family Order ---
 
-    st.subheader(f"⚠️ Unassigned Families on {selected_date.strftime('%d/%m/%Y')}")
-    if not unassigned_filtered.empty:
-        st.dataframe(unassigned_filtered.drop(columns=["id"], errors="ignore")[["people", "check_in", "check_out", "room_type", "forced_room"]], use_container_width=True)
-    else:
-        st.info("📭 No unassigned families on that date.")
+st.markdown("### 🗑️ Delete Family Order")
+if families_df is not None:
+    family_to_delete = st.selectbox("Select a family to delete", sorted(families_df["family"].unique()))
+    if st.button("Delete Selected Family"):
+        families_df = families_df[families_df["family"] != family_to_delete]
+        st.session_state["families"] = families_df
+        st.success(f"Deleted family: {family_to_delete}")
