@@ -10,54 +10,13 @@ from collections import defaultdict
 import pandas as pd
 
 # -----------------------------------------------------------------------------
-# Compatibility shim: are_serial and date/utils
+# Compatibility shim: are_serial falls back to no-op if missing
 # -----------------------------------------------------------------------------
 try:
-    from .utils import are_serial, parse_room_number, _parse_date, _overlaps
+    from .utils import are_serial, parse_room_number
 except ImportError:
     def are_serial(a, b): return False
     def parse_room_number(x): return None
-    def _parse_date(x): raise NotImplementedError
-    def _overlaps(a, b): raise NotImplementedError
-
-# -----------------------------------------------------------------------------
-# שׂטח-specific soft-constraint parameters
-# -----------------------------------------------------------------------------
-PROHIBITED_SINGLE_ROOMS = {2, 3, 4, 5, 15}
-SHTACH_CLUSTERS = [
-    {9, 10, 11},
-    {10, 11},    # nested cluster rule
-    {13, 14},
-    {16, 18},
-]
-LAST_PRIORITY_ROOM = 15
-
-def penalty_for_shtach(booking_group: List[Booking], assigned_rooms: List[int]) -> int:
-    penalty = 0
-
-# Legacy alias for backward compatibility
-assign_per_type = assign_rooms
-
-    # 1) Single-family prohibition
-    if len(booking_group) == 1:
-        room = assigned_rooms[0]
-        if room in PROHIBITED_SINGLE_ROOMS:
-            penalty += 50
-        if room == LAST_PRIORITY_ROOM:
-            penalty += 100
-
-    # 2) Don’t split across any defined clusters
-    for cluster in SHTACH_CLUSTERS:
-        inside = [r for r in assigned_rooms if r in cluster]
-        if 0 < len(inside) < len(assigned_rooms):
-            penalty += 30
-
-    # 3) Last-priority for room 15 (all families)
-    for r in assigned_rooms:
-        if r == LAST_PRIORITY_ROOM:
-            penalty += 20
-
-    return penalty
 
 # -----------------------------------------------------------------------------
 # Data classes
@@ -69,7 +28,7 @@ class Booking:
     room_type: str
     check_in: str
     check_out: str
-    forced_rooms: List[int]
+    forced_rooms: List[int]           # parsed from forced_room CSV field
 
 @dataclass
 class Room:
@@ -89,25 +48,29 @@ def assign_rooms(
     solve_per_type: bool = True,
 ) -> Tuple[pd.DataFrame, pd.DataFrame]:
     """
-    Backtracking solver with MRV + soft scoring, per-room_type.
+    Backtracking solver with MRV + soft scoring, per-room_type solving.
     """
     log = log_func or (lambda m: None)
 
-    # --- 1) Build Booking list, parsing forced_room → List[int]
+    # 1) Build Booking objects, parsing forced_room into a list
     bookings: List[Booking] = []
     for i, row in families_df.fillna("").iterrows():
         raw = str(row.get("forced_room", "")).strip()
-        forced = [int(tok) for tok in raw.split(",") if tok.strip().isdigit()] if raw else []
+        if raw:
+            forced_list = [int(tok) for tok in raw.split(",") if tok.strip().isdigit()]
+        else:
+            forced_list = []
+
         bookings.append(Booking(
             idx=int(i),
             family=str(row.get("family", "")).strip(),
             room_type=str(row.get("room_type", "")).strip(),
             check_in=str(row.get("check_in", "")).strip(),
             check_out=str(row.get("check_out", "")).strip(),
-            forced_rooms=forced,
+            forced_rooms=forced_list,
         ))
 
-    # --- 2) Build Room list
+    # 2) Build Room objects
     rooms_list: List[Room] = []
     for _, row in rooms_df.fillna("").iterrows():
         rooms_list.append(Room(
@@ -115,29 +78,28 @@ def assign_rooms(
             room_type=str(row.get("room_type", "")).strip(),
         ))
 
-    # --- 3) Group rooms by type
+    # 3) Group rooms by type
     rooms_by_type: Dict[str, List[Room]] = defaultdict(list)
     for rm in rooms_list:
         rooms_by_type[rm.room_type].append(rm)
 
-    # --- 4) Per-type solve
-    all_assigned = []    # List[(booking_idx, room_label)]
-    all_unassigned = []  # List[booking_idx]
+    # 4) Per-type backtracking
+    all_assigned = []    # List of (booking_idx, room_label)
+    all_unassigned = []  # List of booking_idx
 
-    for rtype, group in _group_by_type(bookings).items():
+    for rtype, group in group_by_room_type(bookings).items():
         available = rooms_by_type.get(rtype, [])
         if not available:
-            # no rooms of this type: everyone unassigned
-            all_unassigned.extend([b.idx for b in group])
+            all_unassigned.extend(b.idx for b in group)
             continue
 
         assigned_map, unassigned_idxs = _search_assignments(
             group, available, time_limit_sec, node_limit, log
         )
-        all_assigned.extend(list(assigned_map.items()))
+        all_assigned.extend(assigned_map.items())
         all_unassigned.extend(unassigned_idxs)
 
-    # --- 5) Build output DataFrames
+    # 5) Build DataFrames
     assigned_rows = []
     for idx, room in all_assigned:
         rec = families_df.loc[idx].to_dict()
@@ -162,30 +124,21 @@ def _search_assignments(
     log: Callable[[str], None],
 ) -> Tuple[Dict[int, str], List[int]]:
     """
-    Should implement MRV + backtracking:
-      - Hard checks: date overlap, room_type match
-      - Soft scoring: are_serial, forced_rooms, shtach penalties
-    Returns:
-      assigned_map: {booking.idx: room_label}
-      unassigned_idxs: [booking.idx, ...]
+    Your MRV + backtracking implementation goes here.
+
+    Should enforce hard constraints (date overlap, room_type match)
+    and apply soft scoring (are_serial, forced_rooms, etc.).
     """
-    # Pseudocode sketch for scoring a complete assignment for one family:
-    #   score = 0
-    #   if booking.forced_rooms:
-    #       if assigned not in booking.forced_rooms: score += X
-    #   if booking.room_type == "שטח":
-    #       score += penalty_for_shtach(family_group, assigned_room_nums)
-    #   if len(family_group) > 1:
-    #       score += serial_penalty(...)
-    #
-    # (Omitted: full MRV/backtracking implementation.)
-    raise NotImplementedError("Insert backtracking logic here.")
+    raise NotImplementedError("Insert your backtracker here.")
 
 # -----------------------------------------------------------------------------
 # Helpers
 # -----------------------------------------------------------------------------
-def _group_by_type(bookings: List[Booking]) -> Dict[str, List[Booking]]:
+def group_by_room_type(bookings: List[Booking]) -> Dict[str, List[Booking]]:
     d: Dict[str, List[Booking]] = defaultdict(list)
     for b in bookings:
         d[b.room_type].append(b)
     return d
+
+# Legacy alias for backward compatibility
+assign_per_type = assign_rooms
