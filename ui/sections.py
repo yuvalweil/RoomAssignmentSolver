@@ -12,318 +12,277 @@ from .helpers import (
     family_filters_ui,
     roomtype_filters_ui,
     apply_filters,
-    build_day_sheet_sections,   # printable sheet data
-    daily_sheet_html,           # printable sheet HTML
+    build_day_sheet_sections,
+    daily_sheet_html,
 )
 from .runner import run_assignment
-from logic.validate import validate_constraints  # only this exists now
+from logic.validate import validate_constraints
 
-# ---------- Recalculate button ----------------------------------------------
+
+def render_header():
+    st.title("Room Assignment Solver")
+    st.markdown("---")
+
+
 def render_recalc_button():
+    """Button to re-run the solver on demand."""
     if not st.session_state["families"].empty and not st.session_state["rooms"].empty:
         if st.button("🔁 Recalculate Assignment"):
             run_assignment()
 
-# ---------- Assignment Overview (All) ---------------------------------------
+
 def render_assigned_overview():
+    """Shows the full assigned/unassigned tables with download buttons."""
     st.markdown("## 📋 Full Assignment Overview")
     col1, col2 = st.columns(2)
 
+    # Assigned
     with col1:
         if not st.session_state["assigned"].empty:
             st.subheader("✅ Assigned Families (All)")
-            all_families = unique_values(st.session_state["assigned"], "family")
-            all_types    = unique_values(st.session_state["assigned"], "room_type")
+            df_assigned = st.session_state["assigned"]
+            fam_sel, fam_q = family_filters_ui(unique_values(df_assigned, "family"), key_prefix="all")
+            rt_sel, rt_q = roomtype_filters_ui(unique_values(df_assigned, "room_type"), key_prefix="all")
 
-            fam_sel_all, fam_q_all = family_filters_ui(all_families, key_prefix="all")
-            rt_sel_all,  rt_q_all  = roomtype_filters_ui(all_types,   key_prefix="all")
-
-            assigned_all_view = apply_filters(
-                st.session_state["assigned"],
-                fam_sel_all, fam_q_all,
-                rt_sel_all,  rt_q_all,
-            )
-
-            if not assigned_all_view.empty:
-                st.write(assigned_all_view.style.apply(highlight_forced, axis=1))
+            view = apply_filters(df_assigned, fam_sel, fam_q, rt_sel, rt_q)
+            if not view.empty:
+                st.write(view.style.apply(highlight_forced, axis=1))
             else:
                 st.info("📭 No rows match the current filters.")
 
-            csv = assigned_all_view.to_csv(index=False).encode("utf-8-sig")
+            csv = view.to_csv(index=False).encode("utf-8-sig")
             st.download_button("📥 Download Assigned", csv, "assigned_families.csv", "text/csv")
 
+    # Unassigned
     with col2:
-        if not st.session_state["unassigned"].empty:
+        df_un = st.session_state["unassigned"]
+        if not df_un.empty:
             st.subheader("⚠️ Unassigned Families (All)")
-            st.dataframe(
-                st.session_state["unassigned"].drop(columns=["id"], errors="ignore"),
-                use_container_width=True,
-            )
-            csv_un = st.session_state["unassigned"].to_csv(index=False).encode("utf-8-sig")
-            st.download_button("📥 Download Unassigned", csv_un, "unassigned_families.csv", "text/csv")
+            st.dataframe(df_un.drop(columns=["id"], errors="ignore"), use_container_width=True)
+            csv = df_un.to_csv(index=False).encode("utf-8-sig")
+            st.download_button("📥 Download Unassigned", csv, "unassigned_families.csv", "text/csv")
 
-# ---------- Date or Range View ----------------------------------------------
+
 def render_date_or_range_view():
+    """Toggle between single-date or date-range views."""
     st.markdown("---")
     st.markdown("## 📅 View Assignments for Date or Range")
 
+    # Toggle state
     if "range_mode" not in st.session_state:
         st.session_state["range_mode"] = False
-
-    toggle_label = (
-        "🔄 Switch to Range View"
-        if not st.session_state["range_mode"]
-        else "🔄 Switch to Single Date View"
-    )
-    if st.button(toggle_label):
+    label = "🔄 Switch to Range View" if not st.session_state["range_mode"] else "🔄 Switch to Single Date View"
+    if st.button(label):
         st.session_state["range_mode"] = not st.session_state["range_mode"]
 
-    assigned_df = with_dt_cols(st.session_state.get("assigned", pd.DataFrame()))
-    unassigned_df = with_dt_cols(st.session_state.get("unassigned", pd.DataFrame()))
+    df_assigned = with_dt_cols(st.session_state.get("assigned", pd.DataFrame()))
+    df_unassigned = with_dt_cols(st.session_state.get("unassigned", pd.DataFrame()))
 
     if st.session_state["range_mode"]:
-        col1, col2 = st.columns(2)
-        with col1:
-            start_date = st.date_input("Start Date", format="DD/MM/YYYY")
-        with col2:
-            end_date = st.date_input("End Date", format="DD/MM/YYYY")
-
-        if start_date > end_date:
-            st.warning("⚠️ End date must be after end date.")
+        # Date range input
+        c1, c2 = st.columns(2)
+        with c1:
+            start = st.date_input("Start Date", format="DD/MM/YYYY")
+        with c2:
+            end = st.date_input("End Date", format="DD/MM/YYYY")
+        if start > end:
+            st.warning("⚠️ End date must be after start date.")
             return
 
-        start_dt = dt.combine(start_date, time.min)
-        end_dt = dt.combine(end_date, time.max)
+        start_dt = dt.combine(start, time.min)
+        end_dt = dt.combine(end, time.max)
+        a = df_assigned[(df_assigned.check_in_dt < end_dt) & (df_assigned.check_out_dt > start_dt)]
+        u = df_unassigned[(df_unassigned.check_in_dt < end_dt) & (df_unassigned.check_out_dt > start_dt)]
 
-        assigned_filtered = assigned_df[
-            (assigned_df["check_in_dt"] < end_dt) & (assigned_df["check_out_dt"] > start_dt)
-        ]
-        unassigned_filtered = unassigned_df[
-            (unassigned_df["check_in_dt"] < end_dt) & (unassigned_df["check_out_dt"] > start_dt)
-        ]
+        fam_sel, fam_q = family_filters_ui(unique_values(a, "family"), key_prefix="range")
+        rt_sel, rt_q = roomtype_filters_ui(unique_values(a, "room_type"), key_prefix="range")
+        a = apply_filters(a, fam_sel, fam_q, rt_sel, rt_q)
 
-        fam_sel_r, fam_q_r = family_filters_ui(unique_values(assigned_filtered, "family"),  key_prefix="range")
-        rt_sel_r,  rt_q_r  = roomtype_filters_ui(unique_values(assigned_filtered, "room_type"), key_prefix="range")
-
-        assigned_filtered = apply_filters(
-            assigned_filtered, fam_sel_r, fam_q_r, rt_sel_r, rt_q_r
-        )
-
-        st.subheader(f"✅ Assigned Families from {start_date:%d/%m/%Y} to {end_date:%d/%m/%Y}")
-        if not assigned_filtered.empty:
-            st.write(
-                assigned_filtered[["family","room","room_type","check_in","check_out","forced_room"]]
-                .style.apply(highlight_forced, axis=1)
-            )
+        st.subheader(f"✅ Assigned Families from {start:%d/%m/%Y} to {end:%d/%m/%Y}")
+        if not a.empty:
+            st.write(a.style.apply(highlight_forced, axis=1))
         else:
             st.info("📭 No assigned families in that range.")
 
-        st.subheader(f"⚠️ Unassigned Families from {start_date:%d/%m/%Y} to {end_date:%d/%m/%Y}")
-        if not unassigned_filtered.empty:
-            st.dataframe(
-                unassigned_filtered.drop(columns=["id"], errors="ignore")[
-                    ["people","check_in","check_out","room_type","forced_room"]
-                ],
-                use_container_width=True,
-            )
+        st.subheader(f"⚠️ Unassigned Families from {start:%d/%m/%Y} to {end:%d/%m/%Y}")
+        if not u.empty:
+            st.dataframe(u.drop(columns=["id"], errors="ignore"), use_container_width=True)
         else:
             st.info("📭 No unassigned families in that range.")
-
     else:
-        selected_date = st.date_input("Select a date", format="DD/MM/YYYY")
-        selected_dt = dt.combine(selected_date, time.min)
+        # Single date input
+        sel = st.date_input("Select a date", format="DD/MM/YYYY")
+        sel_dt = dt.combine(sel, time.min)
+        a = df_assigned[(df_assigned.check_in_dt <= sel_dt) & (df_assigned.check_out_dt > sel_dt)]
+        u = df_unassigned[(df_unassigned.check_in_dt <= sel_dt) & (df_unassigned.check_out_dt > sel_dt)]
 
-        assigned_filtered = assigned_df[
-            (assigned_df["check_in_dt"] <= selected_dt) & (assigned_df["check_out_dt"] > selected_dt)
-        ]
-        unassigned_filtered = unassigned_df[
-            (unassigned_df["check_in_dt"] <= selected_dt) & (unassigned_df["check_out_dt"] > selected_dt)
-        ]
+        fam_sel, fam_q = family_filters_ui(unique_values(a, "family"), key_prefix="date")
+        rt_sel, rt_q = roomtype_filters_ui(unique_values(a, "room_type"), key_prefix="date")
+        a = apply_filters(a, fam_sel, fam_q, rt_sel, rt_q)
 
-        fam_sel_d, fam_q_d = family_filters_ui(unique_values(assigned_filtered, "family"),  key_prefix="date")
-        rt_sel_d,  rt_q_d  = roomtype_filters_ui(unique_values(assigned_filtered, "room_type"), key_prefix="date")
-
-        assigned_filtered = apply_filters(
-            assigned_filtered, fam_sel_d, fam_q_d, rt_sel_d, rt_q_d
-        )
-
-        st.subheader(f"✅ Assigned Families on {selected_date:%d/%m/%Y}")
-        if not assigned_filtered.empty:
-            st.write(
-                assigned_filtered[["family","room","room_type","check_in","check_out","forced_room"]]
-                .style.apply(highlight_forced, axis=1)
-            )
+        st.subheader(f"✅ Assigned Families on {sel:%d/%m/%Y}")
+        if not a.empty:
+            st.write(a.style.apply(highlight_forced, axis=1))
         else:
             st.info("📭 No assigned families on that date.")
 
-        st.subheader(f"⚠️ Unassigned Families on {selected_date:%d/%m/%Y}")
-        if not unassigned_filtered.empty:
-            st.dataframe(
-                unassigned_filtered.drop(columns=["id"], errors="ignore")[
-                    ["people","check_in","check_out","room_type","forced_room"]
-                ],
-                use_container_width=True,
-            )
+        st.subheader(f"⚠️ Unassigned Families on {sel:%d/%m/%Y}")
+        if not u.empty:
+            st.dataframe(u.drop(columns=["id"], errors="ignore"), use_container_width=True)
         else:
             st.info("📭 No unassigned families on that date.")
 
-# ---------- Daily Operations Sheet ------------------------------------------
+
 def render_daily_operations_sheet():
+    """Printable daily sheet using only the raw input CSVs (assignment optional)."""
     st.markdown("---")
     st.markdown("## 🗂️ Daily Operations Sheet (Printable)")
 
-    families_df = st.session_state.get("families", pd.DataFrame())
-    rooms_df    = st.session_state.get("rooms",    pd.DataFrame())
-    if families_df.empty or rooms_df.empty:
+    fam = st.session_state.get("families", pd.DataFrame())
+    rms = st.session_state.get("rooms", pd.DataFrame())
+    if fam.empty or rms.empty:
         st.info("Upload both families.csv and rooms.csv to generate the sheet.")
         return
 
     on_date = st.date_input("Select date", format="DD/MM/YYYY")
-    include_empty = st.checkbox(
-        "Show empty units", value=True,
-        help="Include rooms/campsites with no booking for visual consistency.",
-    )
+    show_empty = st.checkbox("Show empty units", value=True,
+                             help="Include units with no booking for layout consistency.")
     on_dt = dt.combine(on_date, time.min)
 
-    assigned_df = st.session_state.get("assigned", pd.DataFrame())
-    sections = build_day_sheet_sections(assigned_df, families_df, rooms_df, on_dt, include_empty)
+    sections = build_day_sheet_sections(
+        st.session_state.get("assigned", pd.DataFrame()), fam, rms, on_dt, show_empty
+    )
 
-    preview_cols   = ["unit","name","people","nights","extra","breakfast","paid","charge","notes"]
-    preview_header = ["יחידה","שם","אנשים","לילות","תוספת","א.בוקר","שולם","לחיוב","הערות"]
+    # Preview with Hebrew headers
+    cols = ["unit", "name", "people", "nights", "extra", "breakfast", "paid", "charge", "notes"]
+    headers = ["יחידה", "שם", "אנשים", "לילות", "תוספת", "א.בוקר", "שולם", "לחיוב", "הערות"]
 
     for sec, rows in sections.items():
         st.subheader(sec)
         if rows:
-            df = pd.DataFrame(rows, columns=preview_cols)
-            df.columns = preview_header
+            df = pd.DataFrame(rows, columns=cols)
+            df.columns = headers
             st.dataframe(df, use_container_width=True)
         else:
             st.caption("— אין נתונים —")
 
-    html_str = daily_sheet_html(sections, on_dt)
+    html = daily_sheet_html(sections, on_dt)
     st.download_button(
         "📥 Download printable HTML",
-        data=html_str.encode("utf-8"),
+        data=html.encode("utf-8"),
         file_name=f"daily_sheet_{on_date:%Y-%m-%d}.html",
         mime="text/html",
     )
 
-# ---------- Manual Override (no calendar rebuild) ----------------------------
+
 def render_manual_override():
+    """Allow manual editing of a single assignment row, with HARD-constraint validation."""
     if st.session_state.get("assigned", pd.DataFrame()).empty:
         return
 
     st.markdown("---")
-    with st.expander("🛠️ Manual assignment override (with validation)", expanded=False):
-        assigned_tbl = st.session_state["assigned"].copy()
-        families = sorted(assigned_tbl["family"].unique())
+    with st.expander("🛠️ Manual assignment override", expanded=False):
+        df = st.session_state["assigned"].copy()
+        families = sorted(df["family"].unique())
         if not families:
             st.info("No assigned families to edit.")
             return
 
-        sel_family = st.selectbox("Family", families)
-        fam_rows = assigned_tbl[assigned_tbl["family"] == sel_family].reset_index(drop=True)
-        row_labels = [
-            f"{i}: {r['room_type']} | {r['check_in']}→{r['check_out']} | current room: {r['room']}"
+        sel = st.selectbox("Family", families)
+        fam_rows = df[df.family == sel].reset_index()
+        labels = [
+            f"{i}: {r.room_type} | {r.check_in}→{r.check_out} | current: {r.room}"
             for i, r in fam_rows.iterrows()
         ]
-        sel_idx = st.selectbox("Select row to edit", list(range(len(fam_rows))), format_func=lambda i: row_labels[i])
+        idx = st.selectbox("Select row to edit", fam_rows.index.tolist(), format_func=lambda i: labels[i])
 
-        sel_rt = fam_rows.loc[sel_idx, "room_type"]
-        candidate_rooms = st.session_state["rooms"]
-        candidate_rooms = candidate_rooms[candidate_rooms["room_type"].astype(str).str.strip() == str(sel_rt).strip()]
-        candidate_rooms = sorted(candidate_rooms["room"].astype(str).str.strip().unique())
+        rt = fam_rows.at[idx, "room_type"]
+        options = st.session_state["rooms"]
+        options = options[options.room_type.astype(str).str.strip() == rt.strip()]
+        opts = sorted(options["room"].astype(str).unique())
 
-        new_room = st.selectbox("New room", candidate_rooms)
+        new_room = st.selectbox("New room", opts)
         if st.button("Apply override"):
-            # apply change
-            ix = st.session_state["assigned"].query("family == @sel_family").index[sel_idx]
-            old = st.session_state["assigned"].at[ix, "room"]
-            st.session_state["assigned"].at[ix, "room"] = new_room
+            orig_room = st.session_state["assigned"].at[fam_rows.at[idx, "index"], "room"]
+            st.session_state["assigned"].at[fam_rows.at[idx, "index"], "room"] = new_room
 
-            # validate
-            hard_ok, soft_violations = validate_constraints(st.session_state["assigned"])
+            hard_ok, soft = validate_constraints(st.session_state["assigned"])
             if not hard_ok:
-                st.error("❌ Change rejected: violates HARD constraints. Reverting.")
-                st.session_state["assigned"].at[ix, "room"] = old
+                st.error("❌ Violates HARD constraints. Reverting.")
+                st.session_state["assigned"].at[fam_rows.at[idx, "index"], "room"] = orig_room
             else:
-                st.success("✅ Change applied. No hard violations.")
-                if soft_violations:
-                    st.warning("Some soft constraints are not met:")
-                    for w in soft_violations:
-                        st.write(f"• {w}")
+                st.success("✅ Change applied.")
+                if soft:
+                    st.warning("Soft-constraint notes:")
+                    for note in soft:
+                        st.write(f"• {note}")
 
-# ---------- Diagnostics (removed) -------------------------------------------
-# explain_soft_constraints no longer exists, so we drop this section entirely.
 
-# ---------- What-If (uses only assign_rooms) --------------------------------
 def render_what_if():
+    """Non-destructive what-if analysis by pinning one forced_room and re-running."""
     if st.session_state["families"].empty or st.session_state["rooms"].empty:
         return
 
     st.markdown("---")
-    with st.expander("🧪 What-if: enforce a specific forced room", expanded=False):
+    with st.expander("🧪 What-if: pin a forced room", expanded=False):
         fam_src = st.session_state["families"].copy()
-        if "family" not in fam_src.columns:
-            if "full_name" in fam_src.columns:
+        if "family" not in fam_src:
+            if "full_name" in fam_src:
                 fam_src["family"] = fam_src["full_name"].astype(str).str.strip()
-            elif "שם מלא" in fam_src.columns:
+            elif "שם מלא" in fam_src:
                 fam_src["family"] = fam_src["שם מלא"].astype(str).str.strip()
 
         if fam_src.empty:
             st.info("Upload families.csv to run a what-if.")
             return
 
-        labels = []
-        for i, r in fam_src.iterrows():
-            labels.append(
-                f"{i}: {r.get('family','').strip()} | {r.get('room_type','')} | "
-                f"{r.get('check_in','')}→{r.get('check_out','')} | forced={r.get('forced_room','') or '-'}"
-            )
+        labels = [
+            f"{i}: {row.family} | {row.room_type} | {row.check_in}→{row.check_out} | forced={row.get('forced_room','') or '-'}"
+            for i, row in fam_src.iterrows()
+        ]
+        choice = st.selectbox("Pick a row to pin", fam_src.index.tolist(), format_func=lambda i: labels[i])
+        sel_row = fam_src.loc[choice]
 
-        sel_row_idx = st.selectbox("Pick a source row to pin", list(fam_src.index), format_func=lambda i: labels[fam_src.index.get_loc(i)])
-        sel_row = fam_src.loc[sel_row_idx]
+        rt = sel_row.room_type.strip()
+        opts = st.session_state["rooms"]
+        opts = opts[opts.room_type.astype(str).str.strip() == rt]
+        room_opts = sorted(opts.room.astype(str).unique())
 
-        sel_rt = sel_row["room_type"].strip()
-        room_options = st.session_state["rooms"]
-        room_options = room_options[room_options["room_type"].astype(str).str.strip() == sel_rt]
-        room_options = sorted(room_options["room"].astype(str).unique())
-
-        chosen_room = st.selectbox("Force this room for the selected row", room_options)
+        pin = st.selectbox("Force this room", room_opts)
 
         if st.button("Run what-if"):
-            from logic.solver import assign_rooms
             fam_test = fam_src.copy()
             fam_test["forced_room"] = fam_test.get("forced_room","").astype(str)
-            fam_test.at[sel_row_idx, "forced_room"] = chosen_room
+            fam_test.at[choice, "forced_room"] = pin
 
+            from logic.solver import assign_rooms
             new_assigned, new_unassigned = assign_rooms(fam_test, st.session_state["rooms"])
-            hard_ok, soft_violations = validate_constraints(new_assigned)
+            hard_ok, soft = validate_constraints(new_assigned)
 
-            st.subheader("Result summary")
             st.write(f"Hard OK: {'✅' if hard_ok else '❌'}")
-            if soft_violations:
+            if soft:
                 st.write("Soft notes:")
-                for s in soft_violations:
-                    st.write(f"• {s}")
+                for n in soft:
+                    st.write(f"• {n}")
 
-            st.write("**Before vs After (selected family)**")
+            st.markdown("**Before vs After**")
             before = st.session_state["assigned"]
             st.write("Before:")
-            st.dataframe(before[before.family == sel_row["family"]], use_container_width=True)
+            st.dataframe(before[before.family == sel_row.family], use_container_width=True)
             st.write("After:")
-            st.dataframe(new_assigned[new_assigned.family == sel_row["family"]], use_container_width=True)
+            st.dataframe(new_assigned[new_assigned.family == sel_row.family], use_container_width=True)
 
-# ---------- Logs --------------------------------------------------------------
+
 def render_logs():
+    """Show the last N lines of the assignment log."""
     if not st.session_state.get("log_lines"):
         return
+
     st.markdown("---")
     st.markdown("### 🐞 Assignment Log")
-
-    n = st.slider("Show last N lines", 20, 1000, 200, 20)
+    n = st.slider("Show last N lines", min_value=20, max_value=1000, value=200, step=20)
     tail = st.session_state["log_lines"][-n:]
     st.text_area("Log (compact)", "\n".join(tail), height=200, label_visibility="collapsed")
 
-    log_bytes = "\n".join(st.session_state["log_lines"]).encode("utf-8-sig")
+    log_bytes = "\n".join(tail).encode("utf-8-sig")
     st.download_button("📥 Download Log", log_bytes, "assignment.log", "text/plain")
