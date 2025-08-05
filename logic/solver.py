@@ -16,13 +16,12 @@ try:
     from .utils import are_serial  # your existing helper
 except Exception:
     def are_serial(a: str, b: str) -> bool:
-        """Fallback: rooms are 'serial' if their numbers differ by 1."""
+        """Fallback: rooms are 'serial' if their numeric parts differ by 1."""
         def num(x):
             m = re.search(r"(\d+)", str(x))
             return int(m.group(1)) if m else None
         na, nb = num(a), num(b)
         return na is not None and nb is not None and abs(na - nb) == 1
-
 
 # -----------------------------------------------------------------------------
 # שטח helpers and preferences
@@ -47,11 +46,10 @@ def field_area_id(num: Optional[int]) -> Optional[int]:
         return 2
     return None
 
-# Preference sets for שטח
-FIELD_ONE_ROOM_PREF    = [8, 12, 17, 1, 18]   # 1 room
-FIELD_TWO_ROOMS_PREF   = [16, 18]             # 2 rooms -> 16,18
-FIELD_THREE_ROOMS_PREF = [12, 13, 14]         # 3 rooms -> 12,13,14
-FIELD_FIVE_ROOMS_PREF  = [1, 2, 3, 4, 5]      # 5 rooms -> 1..5
+FIELD_ONE_ROOM_PREF    = [8, 12, 17, 1, 18]   # size=1
+FIELD_TWO_ROOMS_PREF   = [16, 18]             # size=2
+FIELD_THREE_ROOMS_PREF = [12, 13, 14]         # size=3
+FIELD_FIVE_ROOMS_PREF  = [1, 2, 3, 4, 5]      # size=5
 
 def field_target_set(group_size: int) -> Optional[List[int]]:
     if group_size == 5:
@@ -64,6 +62,18 @@ def field_target_set(group_size: int) -> Optional[List[int]]:
         return FIELD_ONE_ROOM_PREF
     return None
 
+# -----------------------------------------------------------------------------
+# NEW: clusters and single-room prohibitions for שטח
+# -----------------------------------------------------------------------------
+PROHIBITED_SINGLE_ROOMS = {2, 3, 4, 5, 15}
+FIELD_CLUSTERS = [
+    {2, 3},
+    {9, 10, 11},
+    {10, 11},      # nested rule
+    {13, 14},
+    {16, 18},
+]
+LAST_PRIORITY_ROOM = 15
 
 # -----------------------------------------------------------------------------
 # Data classes
@@ -82,28 +92,27 @@ class Room:
     room: str
     room_type: str
 
-
 # -----------------------------------------------------------------------------
 # Build שטח groups (family + type + identical date range)
 # -----------------------------------------------------------------------------
 def build_field_groups(bookings: List[Booking]) -> Dict[Tuple[str, str, str, str], Dict]:
-    """
-    For שטח bookings only: groups by (family, room_type, check_in, check_out)
-    Keeps: size, target_set (by size), assigned_numbers (during search), chosen_area.
-    """
     groups: Dict[Tuple[str, str, str, str], Dict] = {}
     for b in bookings:
         if not is_field_type(b.room_type):
             continue
         key = (b.family, b.room_type, b.check_in, b.check_out)
         if key not in groups:
-            groups[key] = {"size": 0, "target_set": None, "assigned_numbers": set(), "chosen_area": None}
+            groups[key] = {
+                "size": 0,
+                "target_set": None,
+                "assigned_numbers": set(),
+                "chosen_area": None
+            }
         groups[key]["size"] += 1
 
     for key, meta in groups.items():
         meta["target_set"] = field_target_set(meta["size"])
     return groups
-
 
 # -----------------------------------------------------------------------------
 # Candidate scoring (soft constraints)
@@ -119,20 +128,20 @@ def score_candidate(
     """
     Lower score is better. Combines:
       - forced_room preference (unless waived)
-      - serial adjacency within same family (unless waived)
-      - שטח group preferences (target sets + stay in same area, avoid 5↔6 split)
+      - serial adjacency (unless waived)
+      - שטח preferences + new cluster rules
     """
     penalty = 0
     tie: List = []
 
-    # forced_room preference
+    # --- forced_room preference
     if not waive_forced and booking.forced_room:
         if str(room.room).strip() != str(booking.forced_room).strip():
             penalty += 5
         else:
             penalty -= 10  # strong bonus
 
-    # serial adjacency
+    # --- serial adjacency
     if not waive_serial:
         last_rooms = family_serial_memory.get(booking.family, [])
         if last_rooms:
@@ -141,14 +150,14 @@ def score_candidate(
             else:
                 penalty += 1
 
-    # שטח preferences
+    # --- שטח preferences & NEW rules
     if is_field_type(booking.room_type):
         key = (booking.family, booking.room_type, booking.check_in, booking.check_out)
         meta = groups.get(key)
         num = extract_room_number(room.room)
         area = field_area_id(num)
 
-        # keep group in same area if size > 1
+        # a) stay in same area vs crossing 5↔6
         if meta and meta["size"] > 1 and meta["assigned_numbers"]:
             assigned_areas = {field_area_id(n) for n in meta["assigned_numbers"] if n is not None}
             chosen = meta.get("chosen_area")
@@ -157,25 +166,43 @@ def score_candidate(
                 meta["chosen_area"] = chosen
             if chosen is not None and area is not None:
                 if area != chosen:
-                    penalty += 6   # crossing 5↔6 boundary is bad
+                    penalty += 6   # crossing boundary
                 else:
-                    penalty -= 2   # staying in the area is good
+                    penalty -= 2   # staying in area
 
-        # favor target numbers by group size
+        # b) favor target numbers by group size
         if meta and meta["target_set"]:
             if num in meta["target_set"]:
                 idx = meta["target_set"].index(num)
-                penalty -= (12 - idx)  # earlier items get more bonus
+                penalty -= (12 - idx)
             else:
                 ts_areas = {field_area_id(n) for n in meta["target_set"] if n is not None}
                 if len(ts_areas) == 1 and area is not None:
-                    (ts_area,) = tuple(ts_areas)
+                    (ts_area,) = ts_areas
                     if ts_area == area:
                         penalty -= 1
 
+        # --- NEW: prohibited singles & last-priority room 15
+        if meta and meta["size"] == 1:
+            if num in PROHIBITED_SINGLE_ROOMS:
+                penalty += 50
+            if num == LAST_PRIORITY_ROOM:
+                penalty += 100
+
+        # --- NEW: cluster-split penalties
+        if meta:
+            assigned = meta["assigned_numbers"]
+            for cluster in FIELD_CLUSTERS:
+                # if some already in cluster and this assignment would straddle
+                in_assigned = assigned & cluster
+                if in_assigned:
+                    # straddle if we assign inside but have outside, or assign outside but have inside
+                    if (num in cluster and any(a not in cluster for a in assigned)) \
+                    or (num not in cluster and in_assigned):
+                        penalty += 30
+
     tie.extend([str(room.room_type), str(room.room)])
     return (penalty, tuple(tie))
-
 
 # -----------------------------------------------------------------------------
 # Search with budgets and best-so-far fallback
