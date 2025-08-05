@@ -35,6 +35,9 @@ LAST_PRIORITY_ROOM = 15
 def penalty_for_shtach(booking_group: List[Booking], assigned_rooms: List[int]) -> int:
     penalty = 0
 
+# Legacy alias for backward compatibility
+assign_per_type = assign_rooms
+
     # 1) Single-family prohibition
     if len(booking_group) == 1:
         room = assigned_rooms[0]
