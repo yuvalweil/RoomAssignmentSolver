@@ -1,11 +1,10 @@
 # logic/__init__.py
 
-from .solver import assign_rooms
+from .solver   import assign_rooms, assign_per_type
 from .validate import validate_constraints
 
-try:
-    from .solver import assign_per_type
-except ImportError:
-    assign_per_type = assign_rooms
-
-__all__ = ["assign_rooms", "validate_constraints", "assign_per_type"]
+__all__ = [
+    "assign_rooms",
+    "assign_per_type",
+    "validate_constraints",
+]
