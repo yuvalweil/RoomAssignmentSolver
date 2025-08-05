@@ -1,6 +1,6 @@
 from __future__ import annotations
 import streamlit as st
-from logic.solver import assign_rooms
+from logic.solver   import assign_rooms
 from logic.validate import validate_constraints
 
 def log_collector():
