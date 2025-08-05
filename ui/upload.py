@@ -3,6 +3,9 @@ import pandas as pd
 from .helpers import read_csv
 from .runner import run_assignment
 
+from logic.solver   import assign_rooms
+from logic.validate import validate_constraints
+
 def render_uploads():
     st.markdown("### 📁 Upload Guest & Room Lists")
     upload_col1, upload_col2 = st.columns(2)
