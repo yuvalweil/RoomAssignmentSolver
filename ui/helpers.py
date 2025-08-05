@@ -14,6 +14,7 @@ def ensure_session_keys() -> None:
         ("assigned",   pd.DataFrame()),
         ("unassigned", pd.DataFrame()),
         ("log_lines",  []),
+        ("range_mode", False),
     ]
     for k, v in defaults:
         if k not in st.session_state:
@@ -36,26 +37,25 @@ def with_dt_cols(df: pd.DataFrame) -> pd.DataFrame:
         df["check_in_dt"]  = pd.to_datetime(pd.Series([], dtype="datetime64[ns]"))
         df["check_out_dt"] = pd.to_datetime(pd.Series([], dtype="datetime64[ns]"))
         return df
-
-    df["check_in_dt"]  = pd.to_datetime(df["check_in"], dayfirst=True, format="%d/%m/%Y")
-    df["check_out_dt"] = pd.to_datetime(df["check_out"], dayfirst=True, format="%d/%m/%Y")
+    if "check_in" in df.columns:
+        df["check_in_dt"] = pd.to_datetime(df["check_in"], format="%d/%m/%Y", errors="coerce")
+    else:
+        df["check_in_dt"] = pd.to_datetime(pd.Series([pd.NaT] * len(df)))
+    if "check_out" in df.columns:
+        df["check_out_dt"] = pd.to_datetime(df["check_out"], format="%d/%m/%Y", errors="coerce")
+    else:
+        df["check_out_dt"] = pd.to_datetime(pd.Series([pd.NaT] * len(df)))
     return df
 
-def _parse_forced_list(x: str) -> list[int]:
-    """Convert a comma-separated string like '3, 2,6 ,18' into [3,2,6,18]."""
-    if not isinstance(x, str):
-        return []
-    s = x.strip()
-    if not s:
-        return []
-    return [int(tok.strip()) for tok in s.split(",") if tok.strip().isdigit()]
+def is_empty_opt(val) -> bool:
+    if pd.isna(val):
+        return True
+    s = str(val).strip().lower()
+    return s in {"", "nan", "none", "null"}
 
 def highlight_forced(row):
-    """Highlight rows where any forced_rooms were specified."""
-    fr_list = _parse_forced_list(row.get("forced_room", ""))
-    if fr_list:
-        return ["background-color: #fff9c4"] * len(row)
-    return [""] * len(row)
+    """Styler: highlight rows that have a forced_room value."""
+    return ["background-color: #fff9c4"] * len(row) if not is_empty_opt(row.get("forced_room", "")) else [""] * len(row)
 
 def unique_values(df: pd.DataFrame, col: str) -> list[str]:
     """Safely get sorted unique values or empty list if col missing/empty df."""
