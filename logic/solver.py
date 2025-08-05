@@ -1,10 +1,12 @@
 # logic/solver.py
 from __future__ import annotations
-import pandas as pd
-from collections import defaultdict
+import time
+import re
 from dataclasses import dataclass
 from typing import Callable, Dict, List, Optional, Tuple
-import re
+from collections import defaultdict
+
+import pandas as pd
 
 # --- Safe import of are_serial (fallback if not present) ---------------------
 try:
@@ -40,10 +42,10 @@ def field_area_id(num: int | None) -> int | None:
     return None
 
 # Preference sets
-FIELD_ONE_ROOM_PREF   = [8, 12, 17, 1, 18]   # 1 room
-FIELD_TWO_ROOMS_PREF  = [16, 18]             # 2 rooms -> 16,18
-FIELD_THREE_ROOMS_PREF= [12, 13, 14]         # 3 rooms -> 12,13,14
-FIELD_FIVE_ROOMS_PREF = [1, 2, 3, 4, 5]      # 5 rooms -> 1..5
+FIELD_ONE_ROOM_PREF    = [8, 12, 17, 1, 18]   # 1 room
+FIELD_TWO_ROOMS_PREF   = [16, 18]             # 2 rooms -> 16,18
+FIELD_THREE_ROOMS_PREF = [12, 13, 14]         # 3 rooms -> 12,13,14
+FIELD_FIVE_ROOMS_PREF  = [1, 2, 3, 4, 5]      # 5 rooms -> 1..5
 
 def field_target_set(group_size: int) -> List[int] | None:
     if group_size == 5:
@@ -94,9 +96,8 @@ def build_field_groups(bookings: List[Booking]) -> Dict[Tuple[str, str, str, str
 def score_candidate(
     booking: Booking,
     room: Room,
-    partial_assign: Dict[int, str],               # booking.idx -> room label
-    groups: Dict[Tuple[str, str, str, str], Dict],
     family_serial_memory: Dict[str, List[str]],
+    groups: Dict[Tuple[str, str, str, str], Dict],
     waive_serial: bool,
     waive_forced: bool,
 ) -> Tuple[int, Tuple]:
@@ -158,15 +159,21 @@ def score_candidate(
     tie.extend([str(room.room_type), str(room.room)])
     return (penalty, tuple(tie))
 
-# --- Main solver API ---------------------------------------------------------
+# --- Public API --------------------------------------------------------------
 def assign_rooms(
     families_df: pd.DataFrame,
     rooms_df: pd.DataFrame,
     log_func: Optional[Callable[[str], None]] = None,
+    *,
+    time_limit_sec: float = 20.0,
+    node_limit: int = 150_000,
+    solve_per_type: bool = True,
 ) -> Tuple[pd.DataFrame, pd.DataFrame]:
     """
     Backtracking solver with MRV + soft scoring.
-    Relaxation ladder: (serial on, forced on) → (serial off, forced on) → (serial off, forced off).
+    - Per-type solving (default) to reduce search space.
+    - Time/node budgets per type with best-so-far fallback.
+    Relaxation ladder per type: (serial on, forced on) → (serial off, forced on) → (serial off, forced off).
     """
     log = (lambda m: None) if log_func is None else log_func
 
@@ -181,6 +188,7 @@ def assign_rooms(
     if "forced_room" not in fam.columns:
         fam["forced_room"] = ""
 
+    # Build bookings
     bookings: List[Booking] = []
     for i, r in fam.iterrows():
         bookings.append(
@@ -194,43 +202,85 @@ def assign_rooms(
             )
         )
 
-    rooms = [
+    # Rooms catalog
+    rooms_list = [
         Room(room=str(r.get("room", "")).strip(), room_type=str(r.get("room_type", "")).strip())
         for _, r in rooms_df.fillna("").iterrows()
     ]
     rooms_by_type: Dict[str, List[Room]] = defaultdict(list)
-    for rm in rooms:
+    for rm in rooms_list:
         rooms_by_type[rm.room_type].append(rm)
 
-    field_groups = build_field_groups(bookings)
+    # Group bookings by type
+    bookings_by_type: Dict[str, List[Booking]] = defaultdict(list)
+    for b in bookings:
+        bookings_by_type[b.room_type].append(b)
 
-    assigned_map: Dict[int, str] = {}
-    for waive_serial, waive_forced in [(False, False), (True, False), (True, True)]:
-        log(f"Start search (waive_serial={waive_serial}, waive_forced={waive_forced})")
-        result = _search_assignments(
-            bookings,
-            rooms_by_type,
-            log=log,
-            waive_serial=waive_serial,
-            waive_forced=waive_forced,
-            field_groups=field_groups,
-        )
-        if result is not None:
-            assigned_map = result
-            break
+    # If no per-type solving, run once on all
+    if not solve_per_type:
+        rt_list = ["<all>"]
+        per_type_bookings = {"<all>": bookings}
+        per_type_rooms = {"<all>": rooms_list}
+    else:
+        rt_list = sorted(bookings_by_type.keys())
+        per_type_bookings = bookings_by_type
+        per_type_rooms = rooms_by_type
 
+    # Distribute budgets across types
+    t_per = max(time_limit_sec / max(1, len(rt_list)), 3.0)  # at least 3s per type
+    n_per = max(node_limit // max(1, len(rt_list)), 20_000)
+
+    global_assigned: Dict[int, str] = {}
+    for rt in rt_list:
+        bk = per_type_bookings.get(rt, [])
+        rms = per_type_rooms.get(rt, [])
+
+        if not bk:
+            continue
+        if not rms:
+            log(f"[{rt}] No rooms available for this type.")
+            continue
+
+        # Build groups for שטח (only these bookings)
+        field_groups = build_field_groups([b for b in bk if is_field_type(b.room_type)])
+
+        # Relaxation ladder per type
+        best_map: Dict[int, str] = {}
+        best_complete = False
+        for waive_serial, waive_forced in [(False, False), (True, False), (True, True)]:
+            log(f"[{rt}] Start search (waive_serial={waive_serial}, waive_forced={waive_forced}) "
+                f"budget={t_per:.1f}s/{n_per} nodes")
+            found_map, complete, explored, timed_out = _search_assignments(
+                bk, rms, field_groups,
+                waive_serial=waive_serial,
+                waive_forced=waive_forced,
+                time_limit_sec=t_per,
+                node_limit=n_per,
+                log=log,
+            )
+            log(f"[{rt}] explored={explored} nodes; timed_out={timed_out}; "
+                f"assigned={len(found_map)}/{len(bk)}; complete={complete}")
+            if len(found_map) > len(best_map):
+                best_map = found_map
+                best_complete = complete
+            if complete:
+                break
+
+        global_assigned.update(best_map)
+
+    # Build outputs
     assigned_rows, unassigned_rows = [], []
     for b in bookings:
         base = {
-            "_idx": b.idx,       # <--- for legacy callers
-            "id": b.idx,         # <--- extra compatibility
+            "_idx": b.idx,       # legacy
+            "id": b.idx,         # extra compatibility
             "family": b.family,
             "room_type": b.room_type,
             "check_in": b.check_in,
             "check_out": b.check_out,
             "forced_room": b.forced_room or "",
         }
-        room_assigned = assigned_map.get(b.idx, "")
+        room_assigned = global_assigned.get(b.idx, "")
         if room_assigned:
             row = dict(base)
             row["room"] = room_assigned
@@ -253,131 +303,7 @@ def assign_per_type(families_arg, rooms_arg, *args, **kwargs):
       • Detect the last callable among *args/**kwargs as log_func.
       • Return (assigned_df, unassigned_df, meta) where meta is a placeholder.
     """
-    # 1) Coerce inputs to DataFrames
     families_df = families_arg if isinstance(families_arg, pd.DataFrame) else pd.DataFrame(families_arg)
     rooms_df    = rooms_arg    if isinstance(rooms_arg,    pd.DataFrame) else pd.DataFrame(rooms_arg)
 
-    # 2) Extract a logger if provided positionally/keyword
-    log_func = kwargs.get("log_func", None)
-    for a in reversed(args):
-        if callable(a):
-            log_func = a
-            break
-
-    # 3) Delegate to the modern solver
-    assigned_df, unassigned_df = assign_rooms(families_df, rooms_df, log_func=log_func)
-
-    # 4) Legacy shape: return three values
-    meta = None
-    return assigned_df, unassigned_df, meta
-
-# --- Backtracking search -----------------------------------------------------
-def _search_assignments(
-    bookings: List[Booking],
-    rooms_by_type: Dict[str, List[Room]],
-    *,
-    log: Callable[[str], None],
-    waive_serial: bool,
-    waive_forced: bool,
-    field_groups: Dict[Tuple[str, str, str, str], Dict],
-) -> Optional[Dict[int, str]]:
-    """
-    MRV + soft value ordering.
-    Hard overlap is enforced via a room->intervals calendar during the search.
-    """
-    calendars: Dict[str, List[Tuple[pd.Timestamp, pd.Timestamp]]] = defaultdict(list)
-
-    def parse_date(s: str) -> pd.Timestamp:
-        return pd.to_datetime(s, format="%d/%m/%Y", errors="coerce")
-
-    intervals = {}
-    for b in bookings:
-        ci = parse_date(b.check_in)
-        co = parse_date(b.check_out)
-        intervals[b.idx] = (ci, co)
-
-    assigned_map: Dict[int, str] = {}
-    family_serial_memory: Dict[str, List[str]] = defaultdict(list)
-
-    def feasible(b: Booking, rm: Room) -> bool:
-        ci, co = intervals[b.idx]
-        if pd.isna(ci) or pd.isna(co):
-            return False
-        for (eci, eco) in calendars[rm.room]:
-            if ci < eco and eci < co:  # [ci,co) overlaps [eci,eco)
-                return False
-        return True
-
-    order = list(range(len(bookings)))
-
-    def backtrack(pos: int) -> Optional[Dict[int, str]]:
-        if pos == len(order):
-            return dict(assigned_map)
-
-        # MRV: find booking with fewest feasible rooms
-        candidates_per_idx: Dict[int, List[Room]] = {}
-        counts: List[Tuple[int, int]] = []
-        for i in order:
-            if i in assigned_map:
-                continue
-            b = bookings[i]
-            rooms = rooms_by_type.get(b.room_type, [])
-            feas = [rm for rm in rooms if feasible(b, rm)]
-            candidates_per_idx[i] = feas
-            counts.append((len(feas), i))
-
-        if not counts:
-            return dict(assigned_map)
-
-        counts.sort()
-        _, idx = counts[0]
-        b = bookings[idx]
-        feas = candidates_per_idx[idx]
-
-        # soft scoring for value ordering
-        scored = []
-        for rm in feas:
-            sc = score_candidate(
-                b, rm, assigned_map, field_groups, family_serial_memory, waive_serial, waive_forced
-            )
-            scored.append((sc, rm))
-        scored.sort(key=lambda x: x[0])
-        ordered_rooms = [rm for _, rm in scored]
-
-        for rm in ordered_rooms:
-            assigned_map[idx] = rm.room
-            ci, co = intervals[idx]
-            calendars[rm.room].append((ci, co))
-            family_serial_memory[b.family].append(rm.room)
-
-            # update שטח group meta
-            if is_field_type(b.room_type):
-                key = (b.family, b.room_type, b.check_in, b.check_out)
-                meta = field_groups.get(key)
-                if meta is not None:
-                    num = extract_room_number(rm.room)
-                    if num is not None:
-                        meta["assigned_numbers"].add(num)
-                        if meta.get("chosen_area") is None:
-                            meta["chosen_area"] = field_area_id(num)
-
-            res = backtrack(pos + 1)
-            if res is not None:
-                return res
-
-            # undo
-            calendars[rm.room].pop()
-            family_serial_memory[b.family].pop()
-            if is_field_type(b.room_type):
-                key = (b.family, b.room_type, b.check_in, b.check_out)
-                meta = field_groups.get(key)
-                if meta is not None:
-                    num = extract_room_number(rm.room)
-                    if num is not None and num in meta["assigned_numbers"]:
-                        meta["assigned_numbers"].remove(num)
-
-            del assigned_map[idx]
-
-        return None
-
-    return backtrack(0)
+    # Extract a logger if pro
