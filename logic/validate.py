@@ -10,8 +10,8 @@ from .utils import _parse_date, _overlaps
 def validate_constraints(assigned_df: pd.DataFrame) -> Tuple[bool, List[str]]:
     """
     Returns:
-      hard_ok (bool): no hard constraint violations
-      soft_violations (List[str]): descriptions of any soft-constraint breaches
+      hard_ok (bool),
+      soft_violations (list[str])
     """
     if assigned_df is None or assigned_df.empty:
         return True, []
@@ -20,7 +20,7 @@ def validate_constraints(assigned_df: pd.DataFrame) -> Tuple[bool, List[str]]:
     hard_ok = True
     soft_violations: List[str] = []
 
-    # --- Hard: no double-booking per room
+    # --- Hard‐constraint checks: no double‐booking per room
     for room, group in df.groupby("room"):
         intervals = [
             (_parse_date(r["check_in"]), _parse_date(r["check_out"]))
@@ -31,18 +31,18 @@ def validate_constraints(assigned_df: pd.DataFrame) -> Tuple[bool, List[str]]:
                 if _overlaps(intervals[i], intervals[j]):
                     hard_ok = False
                     soft_violations.append(
-                        f"Hard violation: room {room} double-booked in rows {group.index[i]} & {group.index[j]}"
+                        f"Double‐booking: room {room} between rows {group.index[i]} and {group.index[j]}"
                     )
 
-    # --- Soft: forced_rooms list enforcement
+    # --- Soft constraints: forced_rooms
     for _, row in df.iterrows():
         raw = str(row.get("forced_room", "")).strip()
         if raw:
             fr_list = [int(tok) for tok in raw.split(",") if tok.strip().isdigit()]
-            assigned = int(str(row["room"]).strip())
-            if assigned not in fr_list:
+            assigned_num = int(str(row["room"]).strip())
+            if assigned_num not in fr_list:
                 soft_violations.append(
-                    f"{row['family']}: assigned room {assigned} not in forced list {fr_list}"
+                    f"{row['family']}: assigned room {assigned_num} not in forced list {fr_list}"
                 )
 
     return hard_ok, soft_violations
