@@ -1,5 +1,6 @@
 # logic/solver.py
 from __future__ import annotations
+
 import time
 import re
 from dataclasses import dataclass
@@ -8,7 +9,9 @@ from collections import defaultdict
 
 import pandas as pd
 
-# --- Safe import of are_serial (fallback if not present) ---------------------
+# -----------------------------------------------------------------------------
+# Safe import of are_serial (fallback if not present)
+# -----------------------------------------------------------------------------
 try:
     from .utils import are_serial  # your existing helper
 except Exception:
@@ -20,18 +23,21 @@ except Exception:
         na, nb = num(a), num(b)
         return na is not None and nb is not None and abs(na - nb) == 1
 
-# --- Field helpers for שטח soft constraints ---------------------------------
+
+# -----------------------------------------------------------------------------
+# שטח helpers and preferences
+# -----------------------------------------------------------------------------
 def is_field_type(room_type: str) -> bool:
     s = (room_type or "").strip().lower()
     return "שטח" in s or "field" in s or "camp" in s or "pitch" in s
 
-def extract_room_number(room: str) -> int | None:
+def extract_room_number(room: str) -> Optional[int]:
     if room is None:
         return None
     m = re.search(r"(\d+)", str(room))
     return int(m.group(1)) if m else None
 
-def field_area_id(num: int | None) -> int | None:
+def field_area_id(num: Optional[int]) -> Optional[int]:
     """Area 1 = 1..5, Area 2 = 6..18; else None."""
     if num is None:
         return None
@@ -41,13 +47,13 @@ def field_area_id(num: int | None) -> int | None:
         return 2
     return None
 
-# Preference sets
+# Preference sets for שטח
 FIELD_ONE_ROOM_PREF    = [8, 12, 17, 1, 18]   # 1 room
 FIELD_TWO_ROOMS_PREF   = [16, 18]             # 2 rooms -> 16,18
 FIELD_THREE_ROOMS_PREF = [12, 13, 14]         # 3 rooms -> 12,13,14
 FIELD_FIVE_ROOMS_PREF  = [1, 2, 3, 4, 5]      # 5 rooms -> 1..5
 
-def field_target_set(group_size: int) -> List[int] | None:
+def field_target_set(group_size: int) -> Optional[List[int]]:
     if group_size == 5:
         return FIELD_FIVE_ROOMS_PREF
     if group_size == 3:
@@ -58,7 +64,10 @@ def field_target_set(group_size: int) -> List[int] | None:
         return FIELD_ONE_ROOM_PREF
     return None
 
-# --- Core data classes -------------------------------------------------------
+
+# -----------------------------------------------------------------------------
+# Data classes
+# -----------------------------------------------------------------------------
 @dataclass
 class Booking:
     idx: int
@@ -66,18 +75,21 @@ class Booking:
     room_type: str
     check_in: str
     check_out: str
-    forced_room: str | None
+    forced_room: Optional[str]
 
 @dataclass
 class Room:
     room: str
     room_type: str
 
-# --- Build שטח groups --------------------------------------------------------
+
+# -----------------------------------------------------------------------------
+# Build שטח groups (family + type + identical date range)
+# -----------------------------------------------------------------------------
 def build_field_groups(bookings: List[Booking]) -> Dict[Tuple[str, str, str, str], Dict]:
     """
-    Groups only שטח bookings by (family, room_type, check_in, check_out).
-    Each group keeps size, target_set (by size), assigned_numbers, and chosen_area.
+    For שטח bookings only: groups by (family, room_type, check_in, check_out)
+    Keeps: size, target_set (by size), assigned_numbers (during search), chosen_area.
     """
     groups: Dict[Tuple[str, str, str, str], Dict] = {}
     for b in bookings:
@@ -92,7 +104,10 @@ def build_field_groups(bookings: List[Booking]) -> Dict[Tuple[str, str, str, str
         meta["target_set"] = field_target_set(meta["size"])
     return groups
 
-# --- Candidate scoring (SOFT constraints) ------------------------------------
+
+# -----------------------------------------------------------------------------
+# Candidate scoring (soft constraints)
+# -----------------------------------------------------------------------------
 def score_candidate(
     booking: Booking,
     room: Room,
@@ -102,7 +117,7 @@ def score_candidate(
     waive_forced: bool,
 ) -> Tuple[int, Tuple]:
     """
-    Lower score is better. We combine:
+    Lower score is better. Combines:
       - forced_room preference (unless waived)
       - serial adjacency within same family (unless waived)
       - שטח group preferences (target sets + stay in same area, avoid 5↔6 split)
@@ -115,7 +130,7 @@ def score_candidate(
         if str(room.room).strip() != str(booking.forced_room).strip():
             penalty += 5
         else:
-            penalty -= 10  # strong bonus if we match forced
+            penalty -= 10  # strong bonus
 
     # serial adjacency
     if not waive_serial:
@@ -133,6 +148,7 @@ def score_candidate(
         num = extract_room_number(room.room)
         area = field_area_id(num)
 
+        # keep group in same area if size > 1
         if meta and meta["size"] > 1 and meta["assigned_numbers"]:
             assigned_areas = {field_area_id(n) for n in meta["assigned_numbers"] if n is not None}
             chosen = meta.get("chosen_area")
@@ -141,14 +157,15 @@ def score_candidate(
                 meta["chosen_area"] = chosen
             if chosen is not None and area is not None:
                 if area != chosen:
-                    penalty += 6   # crossing 5↔6 boundary is undesirable
+                    penalty += 6   # crossing 5↔6 boundary is bad
                 else:
-                    penalty -= 2   # staying in the same area is slightly good
+                    penalty -= 2   # staying in the area is good
 
+        # favor target numbers by group size
         if meta and meta["target_set"]:
             if num in meta["target_set"]:
                 idx = meta["target_set"].index(num)
-                penalty -= (12 - idx)  # earlier preferred numbers get more bonus
+                penalty -= (12 - idx)  # earlier items get more bonus
             else:
                 ts_areas = {field_area_id(n) for n in meta["target_set"] if n is not None}
                 if len(ts_areas) == 1 and area is not None:
@@ -159,7 +176,171 @@ def score_candidate(
     tie.extend([str(room.room_type), str(room.room)])
     return (penalty, tuple(tie))
 
-# --- Public API --------------------------------------------------------------
+
+# -----------------------------------------------------------------------------
+# Search with budgets and best-so-far fallback
+# -----------------------------------------------------------------------------
+def _search_assignments(
+    bookings: List[Booking],
+    rooms: List[Room],
+    field_groups_all: Dict[Tuple[str, str, str, str], Dict],
+    *,
+    waive_serial: bool,
+    waive_forced: bool,
+    time_limit_sec: float,
+    node_limit: int,
+    log: Callable[[str], None],
+) -> Tuple[Dict[int, str], bool, int, bool]:
+    """
+    Returns: (best_assignment_map, complete, explored_nodes, timed_out)
+    complete=True iff all bookings assigned within budgets.
+    """
+    start = time.perf_counter()
+    explored_nodes = 0
+    timed_out = False
+
+    # Per-room calendars: room -> list[(ci,co)]
+    calendars: Dict[str, List[Tuple[pd.Timestamp, pd.Timestamp]]] = defaultdict(list)
+    family_serial_memory: Dict[str, List[str]] = defaultdict(list)
+
+    # Only keep field_groups relevant to these bookings
+    bset = {(b.family, b.room_type, b.check_in, b.check_out) for b in bookings if is_field_type(b.room_type)}
+    field_groups = {k: dict(v) for k, v in field_groups_all.items() if k in bset}
+    for meta in field_groups.values():
+        meta["assigned_numbers"] = set()
+        meta["chosen_area"] = None
+
+    # Parse intervals once
+    def parse_date(s: str) -> pd.Timestamp:
+        return pd.to_datetime(s, format="%d/%m/%Y", errors="coerce")
+    intervals = {b.idx: (parse_date(b.check_in), parse_date(b.check_out)) for b in bookings}
+
+    # Index rooms by type (these bookings share one type in per-type mode)
+    rooms_by_type: Dict[str, List[Room]] = defaultdict(list)
+    for rm in rooms:
+        rooms_by_type[rm.room_type].append(rm)
+
+    # Best-so-far
+    best_map: Dict[int, str] = {}
+    best_penalty = float("inf")  # lower is better; used when assigned counts equal
+
+    order = list(range(len(bookings)))  # fixed order list; we still compute MRV each step
+
+    def feasible(b: Booking, rm: Room) -> bool:
+        ci, co = intervals[b.idx]
+        if pd.isna(ci) or pd.isna(co):
+            return False
+        for (eci, eco) in calendars[rm.room]:
+            if ci < eco and eci < co:  # [ci,co) overlaps [eci,eco)
+                return False
+        return True
+
+    def now_exceeded() -> bool:
+        nonlocal timed_out
+        if explored_nodes >= node_limit:
+            timed_out = True
+            return True
+        if (time.perf_counter() - start) >= time_limit_sec:
+            timed_out = True
+            return True
+        return False
+
+    def backtrack(pos: int, current_map: Dict[int, str], current_pen: int) -> Optional[Dict[int, str]]:
+        nonlocal explored_nodes, best_map, best_penalty
+
+        if now_exceeded():
+            return None
+
+        # Update best-so-far with partial (more assigned, then lower penalty)
+        if len(current_map) > len(best_map) or (len(current_map) == len(best_map) and current_pen < best_penalty):
+            best_map = dict(current_map)
+            best_penalty = current_pen
+
+        if pos == len(order):
+            return dict(current_map)  # full solution
+
+        # MRV: choose next booking with fewest feasible rooms
+        candidates_per_idx: Dict[int, List[Room]] = {}
+        mrv_list: List[Tuple[int, int]] = []
+        for i in order:
+            if i in current_map:
+                continue
+            b = bookings[i]
+            feas = [rm for rm in rooms_by_type.get(b.room_type, []) if feasible(b, rm)]
+            candidates_per_idx[i] = feas
+            mrv_list.append((len(feas), i))
+
+        explored_nodes += 1
+        if not mrv_list:
+            return dict(current_map)
+
+        mrv_list.sort()
+        _, idx = mrv_list[0]
+        b = bookings[idx]
+        feas = candidates_per_idx[idx]
+
+        # Value ordering with soft scoring
+        scored = []
+        for rm in feas:
+            sc_pen, _ = score_candidate(
+                b, rm, family_serial_memory, field_groups, waive_serial, waive_forced
+            )
+            scored.append(((sc_pen,), rm))
+        scored.sort(key=lambda x: x[0])  # lower penalty first
+        ordered_rooms = [rm for _, rm in scored]
+
+        for rm in ordered_rooms:
+            # assign
+            current_map[idx] = rm.room
+            ci, co = intervals[idx]
+            calendars[rm.room].append((ci, co))
+            family_serial_memory[b.family].append(rm.room)
+
+            # update שטח group meta to influence next picks
+            if is_field_type(b.room_type):
+                key = (b.family, b.room_type, b.check_in, b.check_out)
+                meta = field_groups.get(key)
+                if meta is not None:
+                    num = extract_room_number(rm.room)
+                    if num is not None:
+                        meta["assigned_numbers"].add(num)
+                        if meta.get("chosen_area") is None:
+                            meta["chosen_area"] = field_area_id(num)
+
+            res = backtrack(
+                pos + 1,
+                current_map,
+                current_pen + score_candidate(b, rm, family_serial_memory, field_groups, waive_serial, waive_forced)[0],
+            )
+            if res is not None and len(res) == len(bookings):
+                return res  # complete solution
+
+            # undo
+            calendars[rm.room].pop()
+            family_serial_memory[b.family].pop()
+            if is_field_type(b.room_type):
+                key = (b.family, b.room_type, b.check_in, b.check_out)
+                meta = field_groups.get(key)
+                if meta is not None:
+                    num = extract_room_number(rm.room)
+                    if num is not None and num in meta["assigned_numbers"]:
+                        meta["assigned_numbers"].remove(num)
+
+            del current_map[idx]
+
+            if now_exceeded():
+                break
+
+        return None
+
+    full = backtrack(0, {}, 0)
+    complete = full is not None and len(full) == len(bookings)
+    return (full or best_map), complete, explored_nodes, timed_out
+
+
+# -----------------------------------------------------------------------------
+# Public API: assign_rooms (per-type + budgets + relaxation)
+# -----------------------------------------------------------------------------
 def assign_rooms(
     families_df: pd.DataFrame,
     rooms_df: pd.DataFrame,
@@ -216,7 +397,7 @@ def assign_rooms(
     for b in bookings:
         bookings_by_type[b.room_type].append(b)
 
-    # If no per-type solving, run once on all
+    # Per-type split
     if not solve_per_type:
         rt_list = ["<all>"]
         per_type_bookings = {"<all>": bookings}
@@ -227,7 +408,7 @@ def assign_rooms(
         per_type_rooms = rooms_by_type
 
     # Distribute budgets across types
-    t_per = max(time_limit_sec / max(1, len(rt_list)), 3.0)  # at least 3s per type
+    t_per = max(time_limit_sec / max(1, len(rt_list)), 3.0)  # minimum 3s per type
     n_per = max(node_limit // max(1, len(rt_list)), 20_000)
 
     global_assigned: Dict[int, str] = {}
@@ -241,7 +422,7 @@ def assign_rooms(
             log(f"[{rt}] No rooms available for this type.")
             continue
 
-        # Build groups for שטח (only these bookings)
+        # Build שטח groups for these bookings only
         field_groups = build_field_groups([b for b in bk if is_field_type(b.room_type)])
 
         # Relaxation ladder per type
@@ -268,7 +449,7 @@ def assign_rooms(
 
         global_assigned.update(best_map)
 
-    # Build outputs
+    # Build outputs with legacy columns
     assigned_rows, unassigned_rows = [], []
     for b in bookings:
         base = {
@@ -292,6 +473,7 @@ def assign_rooms(
 
     return pd.DataFrame(assigned_rows), pd.DataFrame(unassigned_rows)
 
+
 # -----------------------------------------------------------------------------
 # Back-compat wrapper for older code paths (core.py still calls this)
 # -----------------------------------------------------------------------------
@@ -306,4 +488,13 @@ def assign_per_type(families_arg, rooms_arg, *args, **kwargs):
     families_df = families_arg if isinstance(families_arg, pd.DataFrame) else pd.DataFrame(families_arg)
     rooms_df    = rooms_arg    if isinstance(rooms_arg,    pd.DataFrame) else pd.DataFrame(rooms_arg)
 
-    # Extract a logger if pro
+    # Extract a logger if provided positionally/keyword
+    log_func = kwargs.get("log_func", None)
+    for a in reversed(args):
+        if callable(a):
+            log_func = a
+            break
+
+    assigned_df, unassigned_df = assign_rooms(families_df, rooms_df, log_func=log_func)
+    meta = None
+    return assigned_df, unassigned_df, meta
