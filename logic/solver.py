@@ -179,6 +179,7 @@ def score_candidate(
 
 # -----------------------------------------------------------------------------
 # Search with budgets and best-so-far fallback
+# (keys ALWAYS use Booking.idx to avoid KeyError on non-0..N indices)
 # -----------------------------------------------------------------------------
 def _search_assignments(
     bookings: List[Booking],
@@ -194,6 +195,7 @@ def _search_assignments(
     """
     Returns: (best_assignment_map, complete, explored_nodes, timed_out)
     complete=True iff all bookings assigned within budgets.
+    IMPORTANT: keys in maps are ALWAYS Booking.idx (original DF index), never list positions.
     """
     start = time.perf_counter()
     explored_nodes = 0
@@ -210,21 +212,24 @@ def _search_assignments(
         meta["assigned_numbers"] = set()
         meta["chosen_area"] = None
 
-    # Parse intervals once
+    # Parse intervals once, keyed by Booking.idx
     def parse_date(s: str) -> pd.Timestamp:
         return pd.to_datetime(s, format="%d/%m/%Y", errors="coerce")
-    intervals = {b.idx: (parse_date(b.check_in), parse_date(b.check_out)) for b in bookings}
+    intervals: Dict[int, Tuple[pd.Timestamp, pd.Timestamp]] = {
+        b.idx: (parse_date(b.check_in), parse_date(b.check_out)) for b in bookings
+    }
 
-    # Index rooms by type (these bookings share one type in per-type mode)
+    # Index rooms by type
     rooms_by_type: Dict[str, List[Room]] = defaultdict(list)
     for rm in rooms:
         rooms_by_type[rm.room_type].append(rm)
 
-    # Best-so-far
+    # Best-so-far (keys are Booking.idx)
     best_map: Dict[int, str] = {}
     best_penalty = float("inf")  # lower is better; used when assigned counts equal
 
-    order = list(range(len(bookings)))  # fixed order list; we still compute MRV each step
+    # Fixed traversal depth; we still do MRV to pick the next booking
+    depth_order = list(range(len(bookings)))
 
     def feasible(b: Booking, rm: Room) -> bool:
         ci, co = intervals[b.idx]
@@ -245,7 +250,7 @@ def _search_assignments(
             return True
         return False
 
-    def backtrack(pos: int, current_map: Dict[int, str], current_pen: int) -> Optional[Dict[int, str]]:
+    def backtrack(depth: int, current_map: Dict[int, str], current_pen: int) -> Optional[Dict[int, str]]:
         nonlocal explored_nodes, best_map, best_penalty
 
         if now_exceeded():
@@ -256,31 +261,32 @@ def _search_assignments(
             best_map = dict(current_map)
             best_penalty = current_pen
 
-        if pos == len(order):
+        if depth == len(depth_order):
             return dict(current_map)  # full solution
 
-        # MRV: choose next booking with fewest feasible rooms
-        candidates_per_idx: Dict[int, List[Room]] = {}
-        mrv_list: List[Tuple[int, int]] = []
-        for i in order:
-            if i in current_map:
+        # MRV: choose next booking (use Booking.idx as the key)
+        candidates_per_bid: Dict[int, List[Room]] = {}
+        mrv_list: List[Tuple[int, int, int]] = []  # (count, pos, bid)
+        for pos in depth_order:
+            b = bookings[pos]
+            bid = b.idx
+            if bid in current_map:
                 continue
-            b = bookings[i]
             feas = [rm for rm in rooms_by_type.get(b.room_type, []) if feasible(b, rm)]
-            candidates_per_idx[i] = feas
-            mrv_list.append((len(feas), i))
+            candidates_per_bid[bid] = feas
+            mrv_list.append((len(feas), pos, bid))
 
         explored_nodes += 1
         if not mrv_list:
             return dict(current_map)
 
         mrv_list.sort()
-        _, idx = mrv_list[0]
-        b = bookings[idx]
-        feas = candidates_per_idx[idx]
+        _, pos, bid = mrv_list[0]
+        b = bookings[pos]
+        feas = candidates_per_bid[bid]
 
         # Value ordering with soft scoring
-        scored = []
+        scored: List[Tuple[Tuple[int], Room]] = []
         for rm in feas:
             sc_pen, _ = score_candidate(
                 b, rm, family_serial_memory, field_groups, waive_serial, waive_forced
@@ -290,9 +296,9 @@ def _search_assignments(
         ordered_rooms = [rm for _, rm in scored]
 
         for rm in ordered_rooms:
-            # assign
-            current_map[idx] = rm.room
-            ci, co = intervals[idx]
+            # assign (keyed by Booking.idx)
+            current_map[bid] = rm.room
+            ci, co = intervals[bid]
             calendars[rm.room].append((ci, co))
             family_serial_memory[b.family].append(rm.room)
 
@@ -308,7 +314,7 @@ def _search_assignments(
                             meta["chosen_area"] = field_area_id(num)
 
             res = backtrack(
-                pos + 1,
+                depth + 1,
                 current_map,
                 current_pen + score_candidate(b, rm, family_serial_memory, field_groups, waive_serial, waive_forced)[0],
             )
@@ -326,7 +332,7 @@ def _search_assignments(
                     if num is not None and num in meta["assigned_numbers"]:
                         meta["assigned_numbers"].remove(num)
 
-            del current_map[idx]
+            del current_map[bid]
 
             if now_exceeded():
                 break
@@ -422,8 +428,8 @@ def assign_rooms(
             log(f"[{rt}] No rooms available for this type.")
             continue
 
-        # Build שטח groups for these bookings only
-        field_groups = build_field_groups([b for b in bk if is_field_type(b.room_type)])
+        # Build שטח groups for these bookings only (function filters internally)
+        field_groups = build_field_groups(bk)
 
         # Relaxation ladder per type
         best_map: Dict[int, str] = {}
