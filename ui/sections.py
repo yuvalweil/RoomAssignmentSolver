@@ -30,30 +30,33 @@ def render_assigned_overview():
     col1, col2 = st.columns(2)
 
     with col1:
-        if not st.session_state["assigned"].empty:
+        assigned_df = st.session_state.get("assigned", pd.DataFrame())
+        if not assigned_df.empty:
             st.subheader("✅ Assigned Families (All)")
-            all_families = unique_values(st.session_state["assigned"], "family")
-            all_types    = unique_values(st.session_state["assigned"], "room_type")
+            all_families = unique_values(assigned_df, "family")
+            all_types    = unique_values(assigned_df, "room_type")
 
             fam_sel_all, fam_q_all = family_filters_ui(all_families, key_prefix="all")
             rt_sel_all,  rt_q_all  = roomtype_filters_ui(all_types,   key_prefix="all")
 
             assigned_all_view = apply_filters(
-                st.session_state["assigned"],
+                assigned_df,
                 fam_sel_all, fam_q_all,
                 rt_sel_all,  rt_q_all,
             )
 
             if not assigned_all_view.empty:
-                # select only the desired columns, reorder, and rename "room" -> "room_num"
-                overview = assigned_all_view[[
+                # desired order + rename
+                desired = [
                     "family",
                     "room_type",
-                    "room_num",
+                    "room",
                     "check_in",
                     "check_out",
                     "forced_room",
-                ]].copy()
+                ]
+                # reindex will insert any missing cols as NaN → we fill with ""
+                overview = assigned_all_view.reindex(columns=desired).fillna("")
                 overview.rename(columns={"room": "room_num"}, inplace=True)
 
                 st.write(overview.style.apply(highlight_forced, axis=1))
@@ -64,14 +67,16 @@ def render_assigned_overview():
             st.download_button("📥 Download Assigned", csv, "assigned_families.csv", "text/csv")
 
     with col2:
-        if not st.session_state["unassigned"].empty:
+        unassigned_df = st.session_state.get("unassigned", pd.DataFrame())
+        if not unassigned_df.empty:
             st.subheader("⚠️ Unassigned Families (All)")
             st.dataframe(
-                st.session_state["unassigned"].drop(columns=["id"], errors="ignore"),
+                unassigned_df.drop(columns=["id"], errors="ignore"),
                 use_container_width=True,
             )
-            csv_un = st.session_state["unassigned"].to_csv(index=False).encode("utf-8-sig")
+            csv_un = unassigned_df.to_csv(index=False).encode("utf-8-sig")
             st.download_button("📥 Download Unassigned", csv_un, "unassigned_families.csv", "text/csv")
+
 
 
 
