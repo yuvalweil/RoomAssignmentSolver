@@ -45,7 +45,18 @@ def render_assigned_overview():
             )
 
             if not assigned_all_view.empty:
-                st.write(assigned_all_view.style.apply(highlight_forced, axis=1))
+                # select only the desired columns, reorder, and rename "room" -> "room_num"
+                overview = assigned_all_view[[
+                    "family",
+                    "room_type",
+                    "room_num",
+                    "check_in",
+                    "check_out",
+                    "forced_room",
+                ]].copy()
+                overview.rename(columns={"room": "room_num"}, inplace=True)
+
+                st.write(overview.style.apply(highlight_forced, axis=1))
             else:
                 st.info("📭 No rows match the current filters.")
 
@@ -61,6 +72,7 @@ def render_assigned_overview():
             )
             csv_un = st.session_state["unassigned"].to_csv(index=False).encode("utf-8-sig")
             st.download_button("📥 Download Unassigned", csv_un, "unassigned_families.csv", "text/csv")
+
 
 
 # ---------- Date or Range View ----------------------------------------------
