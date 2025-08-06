@@ -173,7 +173,7 @@ def render_date_or_range_view():
         st.subheader(f"✅ Assigned Families on {selected_date.strftime('%d/%m/%Y')}")
         if not assigned_filtered.empty:
             st.write(
-                assigned_filtered[["family", "room", "room_type", "check_in", "check_out", "forced_room"]]
+                assigned_filtered[["family", "room_type", "room",  "check_in", "check_out", "forced_room"]]
                 .style.apply(highlight_forced, axis=1)
             )
         else:
