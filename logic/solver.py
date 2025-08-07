@@ -247,7 +247,9 @@ def _search_assignments(
     best_map: Dict[int, str] = {}
     best_penalty = float("inf")
 
-    depth_order = list(range(len(bookings)))
+    forced_pos = [i for i, b in enumerate(bookings) if b.forced_room]
+    nonforced = [i for i, b in enumerate(bookings) if not b.forced_room]
+    depth_order = forced_pos + nonforced
 
     def feasible(b: Booking, rm: Room) -> bool:
         ci, co = intervals[b.idx]
