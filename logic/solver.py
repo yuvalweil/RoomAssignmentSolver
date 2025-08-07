@@ -362,8 +362,9 @@ def assign_rooms(
     rooms_df: pd.DataFrame,
     log_func: Optional[Callable[[str], None]] = None,
     *,
-    time_limit_sec: float = 20.0,
-    node_limit: int = 150_000,
+    # Increased budgets to give Modes 1/2 a better chance
+    time_limit_sec: float = 60.0,
+    node_limit: int = 500_000,
     solve_per_type: bool = True,
 ) -> Tuple[pd.DataFrame, pd.DataFrame]:
     """
