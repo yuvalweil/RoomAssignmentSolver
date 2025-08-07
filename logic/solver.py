@@ -126,12 +126,6 @@ def score_candidate(
     waive_serial: bool,
     waive_forced: bool,
 ) -> Tuple[int, Tuple]:
-    """
-    Lower score is better. Combines:
-      - forced_room preference (unless waived)
-      - serial adjacency (unless waived)
-      - שטח preferences + new cluster rules
-    """
     penalty = 0
     tie: List = []
 
@@ -151,14 +145,13 @@ def score_candidate(
             else:
                 penalty += 1
 
-    # --- שטח preferences & NEW rules
+    # --- שטח preferences & cluster rules
     if is_field_type(booking.room_type):
         key = (booking.family, booking.room_type, booking.check_in, booking.check_out)
         meta = groups.get(key)
         num = extract_room_number(room.room)
         area = field_area_id(num)
 
-        # a) stay in same area vs crossing 5↔6
         if meta and meta["size"] > 1 and meta["assigned_numbers"]:
             assigned_areas = {field_area_id(n) for n in meta["assigned_numbers"] if n is not None}
             chosen = meta.get("chosen_area")
@@ -166,38 +159,29 @@ def score_candidate(
                 chosen = assigned_areas.pop()
                 meta["chosen_area"] = chosen
             if chosen is not None and area is not None:
-                if area != chosen:
-                    penalty += 6   # crossing boundary
-                else:
-                    penalty -= 2   # staying in area
+                penalty += (6 if area != chosen else -2)
 
-        # b) favor target numbers by group size
         if meta and meta["target_set"]:
             if num in meta["target_set"]:
                 idx = meta["target_set"].index(num)
                 penalty -= (12 - idx)
             else:
                 ts_areas = {field_area_id(n) for n in meta["target_set"] if n is not None}
-                if len(ts_areas) == 1 and area is not None:
-                    (ts_area,) = ts_areas
-                    if ts_area == area:
-                        penalty -= 1
+                if len(ts_areas) == 1 and area is not None and next(iter(ts_areas)) == area:
+                    penalty -= 1
 
-        # --- NEW: prohibited singles & last-priority room 15
         if meta and meta["size"] == 1:
             if num in PROHIBITED_SINGLE_ROOMS:
                 penalty += 50
             if num == LAST_PRIORITY_ROOM:
                 penalty += 100
 
-        # --- NEW: cluster-split penalties
         if meta:
             assigned = meta["assigned_numbers"]
             for cluster in FIELD_CLUSTERS:
-                in_assigned = assigned & cluster
-                if in_assigned:
-                    if (num in cluster and any(a not in cluster for a in assigned)) \
-                    or (num not in cluster and in_assigned):
+                if assigned & cluster:
+                    if (num in cluster and any(a not in cluster for a in assigned)) or (
+                        num not in cluster and assigned & cluster):
                         penalty += 30
 
     tie.extend([str(room.room_type), str(room.room)])
@@ -217,10 +201,6 @@ def _search_assignments(
     node_limit: int,
     log: Callable[[str], None],
 ) -> Tuple[Dict[int, str], bool, int, bool]:
-    """
-    Returns: (best_assignment_map, complete, explored_nodes, timed_out)
-    complete=True iff all bookings assigned within budgets.
-    """
     start = time.perf_counter()
     explored_nodes = 0
     timed_out = False
@@ -236,6 +216,7 @@ def _search_assignments(
 
     def parse_date(s: str) -> pd.Timestamp:
         return pd.to_datetime(s, format="%d/%m/%Y", errors="coerce")
+
     intervals: Dict[int, Tuple[pd.Timestamp, pd.Timestamp]] = {
         b.idx: (parse_date(b.check_in), parse_date(b.check_out)) for b in bookings
     }
@@ -247,6 +228,8 @@ def _search_assignments(
     best_map: Dict[int, str] = {}
     best_penalty = float("inf")
 
+    # -------------------------------------------------------------------------
+    # Ensure forced-room bookings are tried first in the depth order
     forced_pos = [i for i, b in enumerate(bookings) if b.forced_room]
     nonforced = [i for i, b in enumerate(bookings) if not b.forced_room]
     depth_order = forced_pos + nonforced
@@ -280,15 +263,23 @@ def _search_assignments(
         if depth == len(depth_order):
             return dict(current_map)
 
-        # MRV selection
         candidates_per_bid: Dict[int, List[Room]] = {}
         mrv_list: List[Tuple[int, int, int]] = []
+
+        # Generate feasible candidates, hard-enforcing forced_room
         for pos in depth_order:
             b = bookings[pos]
             bid = b.idx
             if bid in current_map:
                 continue
+
             feas = [rm for rm in rooms_by_type.get(b.room_type, []) if feasible(b, rm)]
+            if b.forced_room:
+                feas = [
+                    rm for rm in feas
+                    if str(rm.room).strip() == str(b.forced_room).strip()
+                ]
+
             candidates_per_bid[bid] = feas
             mrv_list.append((len(feas), pos, bid))
 
@@ -301,7 +292,7 @@ def _search_assignments(
         b = bookings[pos]
         feas = candidates_per_bid[bid]
 
-        # Value ordering
+        # Value ordering by score
         scored: List[Tuple[Tuple[int], Room]] = []
         for rm in feas:
             sc_pen, _ = score_candidate(
@@ -335,6 +326,7 @@ def _search_assignments(
             if res is not None and len(res) == len(bookings):
                 return res
 
+            # undo assignment
             calendars[rm.room].pop()
             family_serial_memory[b.family].pop()
             if is_field_type(b.room_type):
@@ -357,26 +349,24 @@ def _search_assignments(
     return (full or best_map), complete, explored_nodes, timed_out
 
 # -----------------------------------------------------------------------------
-# Public API: assign_rooms (per-type + budgets + relaxation)
+# Public API: assign_rooms
 # -----------------------------------------------------------------------------
 def assign_rooms(
     families_df: pd.DataFrame,
     rooms_df: pd.DataFrame,
     log_func: Optional[Callable[[str], None]] = None,
     *,
-    # Increased budgets to give Modes 1/2 a better chance
     time_limit_sec: float = 60.0,
     node_limit: int = 500_000,
     solve_per_type: bool = True,
 ) -> Tuple[pd.DataFrame, pd.DataFrame]:
     """
     Backtracking solver with MRV + soft scoring.
-    - Per-type solving (default) to reduce search space.
-    - Time/node budgets per type with best-so-far fallback.
+    Forced_room has been promoted to a HARD constraint.
     Relaxation ladder per type:
-      1) honor forced_room only,
-      2) honor forced_room + serial adjacency,
-      3) relax both.
+      1) honor forced_room only
+      2) honor forced_room + serial adjacency
+      3) relax both
     """
     log = (lambda m: None) if log_func is None else log_func
 
@@ -441,10 +431,6 @@ def assign_rooms(
 
         field_groups = build_field_groups(bk)
 
-        # Relaxation ladder per type:
-        #   1) honor forced_room only
-        #   2) honor forced_room + serial adjacency
-        #   3) relax both
         best_map: Dict[int, str] = {}
         best_complete = False
         for waive_serial, waive_forced in [
@@ -493,7 +479,7 @@ def assign_rooms(
     return pd.DataFrame(assigned_rows), pd.DataFrame(unassigned_rows)
 
 # -----------------------------------------------------------------------------
-# Back-compat wrapper for older code paths (core.py still calls this)
+# Back-compat wrapper
 # -----------------------------------------------------------------------------
 def assign_per_type(families_arg, rooms_arg, *args, **kwargs):
     families_df = families_arg if isinstance(families_arg, pd.DataFrame) else pd.DataFrame(families_arg)
