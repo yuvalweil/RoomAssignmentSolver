@@ -235,7 +235,18 @@ def render_date_or_range_view():
         if not assigned_filtered.empty:
             st.write(
                 assigned_filtered[["family", "room_type", "room_num", "check_in", "check_out", "forced_room"]]
-                .style.apply(highlight_forced, axis=1)
+                    .style.apply(highlight_forced, axis=1)
+            )
+            # NEW: download assigned (per day)
+            display_cols = ["family", "room_type", "room_num", "check_in", "check_out", "forced_room"]
+            ex_df = assigned_filtered[display_cols].copy()
+            csv_bytes = ex_df.to_csv(index=False).encode("utf-8-sig")
+            iso_day = selected_date.strftime("%Y-%m-%d")
+            st.download_button(
+                f"📥 Download Assigned ({iso_day})",
+                csv_bytes,
+                file_name=f"assigned_{iso_day}.csv",
+                mime="text/csv",
             )
         else:
             st.info("📭 No assigned families on that date (after filters).")
