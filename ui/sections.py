@@ -5,20 +5,18 @@ from datetime import datetime as dt, time
 
 from .helpers import (
     with_dt_cols,
-    highlight_forced,
+    highlight_forced,       # make sure this supports room/room_num (I shared a version earlier)
     unique_values,
     family_filters_ui,
     roomtype_filters_ui,
     apply_filters,
-    build_day_sheet_sections,   # printable sheet data (now uses only families+rooms; assignment optional)
-    daily_sheet_html,           # printable sheet HTML
-    apply_natural_room_order,   # NEW: natural sort for 'room' (uses _room_sort_key)
-    sort_by_room_natural,
+    build_day_sheet_sections,   # printable sheet data (hidden for now)
+    daily_sheet_html,           # printable sheet HTML (hidden for now)
 )
 from .runner import run_assignment
 from logic import rebuild_calendar_from_assignments, validate_constraints, explain_soft_constraints
 
-# Feature flag to hide Daily Operations Sheet for now
+# Hide the printable daily sheet for now (flip to True when you want it back)
 ENABLE_DAILY_SHEET = False
 
 
@@ -27,6 +25,23 @@ def render_recalc_button():
     if not st.session_state["families"].empty and not st.session_state["rooms"].empty:
         if st.button("🔁 Recalculate Assignment"):
             run_assignment()
+
+
+# ---------- Helpers (local) --------------------------------------------------
+def _add_room_num(df: pd.DataFrame, room_col: str = "room") -> pd.DataFrame:
+    """
+    Adds a numeric 'room_num' column parsed from 'room' (digits only).
+    Sorting by 'room_num' fixes lexicographic issues (10 > 4, etc.).
+    Non-numeric rooms get NaN and are placed last when sorting.
+    """
+    if df is None or df.empty or room_col not in df.columns:
+        return df
+    out = df.copy()
+    out["room_num"] = (
+        out[room_col].astype(str).str.extract(r"(\d+)", expand=False)
+    )
+    out["room_num"] = pd.to_numeric(out["room_num"], errors="coerce")
+    return out
 
 
 # ---------- Assignment Overview (All) ---------------------------------------
@@ -51,13 +66,15 @@ def render_assigned_overview():
             )
 
             if not assigned_all_view.empty:
-                # select, reorder (robustly), natural room order, and rename "room" -> "room_num"
+                # Build overview, add room_num, sort by it, and display only requested columns
                 desired = ["family", "room_type", "room", "check_in", "check_out", "forced_room"]
                 overview = assigned_all_view.reindex(columns=desired).copy()
-                overview = apply_natural_room_order(overview, "room")
-                overview.rename(columns={"room": "room_num"}, inplace=True)
+                overview = _add_room_num(overview, "room")
+                overview = overview.sort_values(["room_num", "room"], na_position="last", kind="stable")
 
-                st.write(overview.style.apply(highlight_forced, axis=1))
+                # Final displayed columns/order (room -> room_num)
+                display_cols = ["family", "room_type", "room_num", "check_in", "check_out", "forced_room"]
+                st.write(overview[display_cols].style.apply(highlight_forced, axis=1))
             else:
                 st.info("📭 No rows match the current filters.")
 
@@ -69,7 +86,6 @@ def render_assigned_overview():
         if not unassigned_df.empty:
             st.subheader("⚠️ Unassigned Families (All)")
             un_df = unassigned_df.drop(columns=["id"], errors="ignore")
-            # Style with forced highlighting too (red when forced but unassigned)
             st.write(un_df.style.apply(highlight_forced, axis=1))
             csv_un = unassigned_df.to_csv(index=False).encode("utf-8-sig")
             st.download_button("📥 Download Unassigned", csv_un, "unassigned_families.csv", "text/csv")
@@ -123,13 +139,14 @@ def render_date_or_range_view():
             rt_sel_r,  rt_q_r,
         )
 
-        # Natural sort by room for nicer click-to-sort behavior
-        assigned_filtered = sort_by_room_natural(apply_filters(assigned_filtered, fam_sel_r, fam_q_r, rt_sel_r, rt_q_r), "room")
-        assigned_filtered = sort_by_room_natural(assigned_filtered, "room")
+        # Add numeric room_num and sort by it
+        assigned_filtered = _add_room_num(assigned_filtered, "room")
+        assigned_filtered = assigned_filtered.sort_values(["room_num", "room"], na_position="last", kind="stable")
+
         st.subheader(f"✅ Assigned Families from {start_date.strftime('%d/%m/%Y')} to {end_date.strftime('%d/%m/%Y')}")
         if not assigned_filtered.empty:
             st.write(
-                assigned_filtered[["family", "room", "room_type", "check_in", "check_out", "forced_room"]]
+                assigned_filtered[["family", "room_type", "room_num", "check_in", "check_out", "forced_room"]]
                 .style.apply(highlight_forced, axis=1)
             )
         else:
@@ -166,18 +183,19 @@ def render_date_or_range_view():
             rt_sel_d,  rt_q_d,
         )
 
-        # Natural sort by room here too
-        assigned_filtered = sort_by_room_natural(apply_filters(assigned_filtered, fam_sel_d, fam_q_d, rt_sel_d, rt_q_d), "room")
-        assigned_filtered = sort_by_room_natural(assigned_filtered, "room")
+        # Add numeric room_num and sort by it
+        assigned_filtered = _add_room_num(assigned_filtered, "room")
+        assigned_filtered = assigned_filtered.sort_values(["room_num", "room"], na_position="last", kind="stable")
+
         st.subheader(f"✅ Assigned Families on {selected_date.strftime('%d/%m/%Y')}")
         if not assigned_filtered.empty:
             st.write(
-                assigned_filtered[["family", "room", "room_type", "check_in", "check_out", "forced_room"]]
+                assigned_filtered[["family", "room_type", "room_num", "check_in", "check_out", "forced_room"]]
                 .style.apply(highlight_forced, axis=1)
             )
         else:
             st.info("📭 No assigned families on that date (after filters).")
-        assigned_filtered = sort_by_room_natural(assigned_filtered, "room")
+
         st.subheader(f"⚠️ Unassigned Families on {selected_date.strftime('%d/%m/%Y')}")
         if not unassigned_filtered.empty:
             unv = unassigned_filtered.drop(columns=["id"], errors="ignore")[
@@ -191,7 +209,6 @@ def render_date_or_range_view():
 # ---------- Daily Operations Sheet (Printable, inputs-only) ------------------
 def render_daily_operations_sheet():
     """Printable daily sheet using ONLY families.csv + rooms.csv (assignment optional)."""
-    # Hidden for now; flip the flag when you want it back
     if not ENABLE_DAILY_SHEET:
         return
 
@@ -212,12 +229,9 @@ def render_daily_operations_sheet():
     )
     on_dt = dt.combine(on_date, time.min)
 
-    # If an assignment exists, it is derived from the two inputs—safe to use.
     assigned_df = st.session_state.get("assigned", pd.DataFrame())
-
     sections = build_day_sheet_sections(assigned_df, families_df, rooms_df, on_dt, include_empty)
 
-    # Preview with final headers
     preview_cols = ["unit","name","people","nights","extra","breakfast","paid","charge","notes"]
     preview_headers = ["יחידה","שם","אנשים","לילות","תוספת","א.בוקר","שולם","לחיוב","הערות"]
 
@@ -230,7 +244,6 @@ def render_daily_operations_sheet():
         else:
             st.caption("— אין נתונים —")
 
-    # Download as single HTML
     html_str = daily_sheet_html(sections, on_dt)
     st.download_button(
         "📥 Download printable HTML",
