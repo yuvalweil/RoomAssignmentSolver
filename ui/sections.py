@@ -13,6 +13,7 @@ from .helpers import (
     build_day_sheet_sections,   # printable sheet data (now uses only families+rooms; assignment optional)
     daily_sheet_html,           # printable sheet HTML
     apply_natural_room_order,   # NEW: natural sort for 'room' (uses _room_sort_key)
+    sort_by_room_natural,
 )
 from .runner import run_assignment
 from logic import rebuild_calendar_from_assignments, validate_constraints, explain_soft_constraints
