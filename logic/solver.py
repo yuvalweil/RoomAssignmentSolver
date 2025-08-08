@@ -303,7 +303,7 @@ def _search_assignments(
         scored: List[Tuple[Tuple[int], Room]] = []
         for rm in feas:
             sc_pen, _ = score_candidate(
-                b, rm, family_serial_memory, field_groups, waive_serial, waive_forced
+                b, rm, family_serial_memory, field_groups, waive_serial, waive_forced, use_soft
             )
             scored.append(((sc_pen,), rm))
         scored.sort(key=lambda x: x[0])
@@ -328,7 +328,7 @@ def _search_assignments(
             res = backtrack(
                 depth + 1,
                 current_map,
-                current_pen + score_candidate(b, rm, family_serial_memory, field_groups, waive_serial, waive_forced)[0],
+                current_pen + score_candidate(b, rm, family_serial_memory, field_groups, waive_serial, waive_forced, use_soft)[0]
             )
             if res is not None and len(res) == len(bookings):
                 return res
@@ -366,6 +366,7 @@ def assign_rooms(
     time_limit_sec: float = 60.0,
     node_limit: int = 500_000,
     solve_per_type: bool = True,
+    use_soft: bool = True,   # NEW
 ) -> Tuple[pd.DataFrame, pd.DataFrame]:
     """
     Backtracking solver with MRV + soft scoring.
