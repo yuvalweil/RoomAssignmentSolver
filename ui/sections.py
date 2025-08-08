@@ -74,10 +74,19 @@ def _safe_pick_cols(df: pd.DataFrame, wanted: list[str]) -> pd.DataFrame:
 # Recalculate button
 # =========================
 def render_recalc_button():
-    if not st.session_state["families"].empty and not st.session_state["rooms"].empty:
+    if "use_soft_constraints" not in st.session_state:
+        st.session_state["use_soft_constraints"] = True  # default ON
+
+    # Toggle: calculate with/without soft constraints
+    st.checkbox(
+        "Apply soft constraints (serial & preferences)",
+        key="use_soft_constraints",
+        help="Turn off to compute using only hard constraints and forced rooms.",
+    )
+
+    if not st.session_state.get("families", pd.DataFrame()).empty and not st.session_state.get("rooms", pd.DataFrame()).empty:
         if st.button("🔁 Recalculate Assignment"):
             run_assignment()
-
 
 # =========================
 # Assignment Overview (All)
