@@ -125,7 +125,13 @@ def score_candidate(
     groups: Dict[Tuple[str, str, str, str], Dict],
     waive_serial: bool,
     waive_forced: bool,
+    use_soft: bool,  # NEW
 ) -> Tuple[int, Tuple]:
+    # If soft constraints are disabled, return zero penalty (hard rules still enforced elsewhere)
+    if not use_soft:
+        # Keep a deterministic tiebreak on type/room so value ordering is stable
+        return (0, (str(room.room_type), str(room.room)))
+
     penalty = 0
     tie: List = []
 
