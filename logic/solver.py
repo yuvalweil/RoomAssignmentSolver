@@ -206,6 +206,7 @@ def _search_assignments(
     time_limit_sec: float,
     node_limit: int,
     log: Callable[[str], None],
+    use_soft: bool,   # NEW
 ) -> Tuple[Dict[int, str], bool, int, bool]:
     start = time.perf_counter()
     explored_nodes = 0
