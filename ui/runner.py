@@ -1,46 +1,41 @@
-# ui/runner.py
-from __future__ import annotations
 import streamlit as st
 import pandas as pd
+from logic.solver import assign_rooms
 
-def run_assignment(use_soft: bool | None = None):
-    # 1) read data
-    families = st.session_state.get("families_df")
-    rooms    = st.session_state.get("rooms_df")
-    if families is None or rooms is None or families.empty or rooms.empty:
-        raise ValueError("families_df/rooms_df missing or empty in session_state")
+def run_assignment():
+    """
+    Recalculate room assignments using fixed solver budgets:
+      - time_limit_sec = 60.0 seconds per room_type
+      - node_limit = 500_000 nodes per room_type
+      - solve_per_type = True
+    """
+    # Initialize/clear log
+    st.session_state["log_lines"] = []
 
-    # 2) read toggle from session unless explicitly provided
-    if use_soft is None:
-        use_soft = bool(st.session_state.get("use_soft_constraints", True))
-    st.session_state["use_soft_constraints"] = use_soft  # keep canonical
+    families_df = st.session_state.get("families", pd.DataFrame())
+    rooms_df    = st.session_state.get("rooms", pd.DataFrame())
 
-    # 3) call your solver (adapt import if needed)
-    from logic.solver import assign_per_type  # or assign_rooms / assign_all, etc.
+    # Clear previous outputs
+    st.session_state["assigned"]   = pd.DataFrame()
+    st.session_state["unassigned"] = pd.DataFrame()
 
-    assigned_df, unassigned_df, meta = assign_per_type(
-        families=families,
-        rooms=rooms,
-        use_soft=use_soft,
-        # pass other budgets/args here if your solver expects them
+    # Fixed budgets
+    time_limit_sec = 60.0
+    node_limit     = 500_000
+    solve_per_type = True
+
+    # NEW: read toggle (default True)
+    use_soft = bool(st.session_state.get("use_soft_constraints", True))
+
+    assigned_df, unassigned_df = assign_rooms(
+        families_df,
+        rooms_df,
+        log_func=lambda msg: st.session_state["log_lines"].append(msg),
+        time_limit_sec=time_limit_sec,
+        node_limit=node_limit,
+        solve_per_type=solve_per_type,
+        use_soft=use_soft,   # <<--- pass the flag
     )
 
-    # 4) guarantee DataFrames & expected columns exist
-    assigned_df  = assigned_df.copy() if isinstance(assigned_df, pd.DataFrame) else pd.DataFrame()
-    unassigned_df = unassigned_df.copy() if isinstance(unassigned_df, pd.DataFrame) else pd.DataFrame()
-
-    # 5) STORE in session under stable keys that pages expect
-    st.session_state["assigned_df"]   = assigned_df
-    st.session_state["unassigned_df"] = unassigned_df
-    st.session_state["assign_meta"]   = meta or {}
-
-    # optional: derive date columns for fast filtering (used by date/range page)
-    for df_key in ("assigned_df", "unassigned_df"):
-        df = st.session_state[df_key]
-        if not df.empty:
-            for c in ("check_in", "check_out"):
-                if c in df.columns and not c.endswith("_dt"):
-                    df[f"{c}_dt"] = pd.to_datetime(df[c], format="%d/%m/%Y", errors="coerce")
-
-    # 6) optional: return as well
-    return assigned_df, unassigned_df, meta
+    st.session_state["assigned"]   = assigned_df
+    st.session_state["unassigned"] = unassigned_df
