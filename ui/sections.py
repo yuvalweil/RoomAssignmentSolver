@@ -124,8 +124,7 @@ def render_date_or_range_view():
         )
 
         # Natural sort by room for nicer click-to-sort behavior
-        assigned_filtered = apply_natural_room_order(assigned_filtered, "room")
-
+        assigned_filtered = sort_by_room_natural(assigned_filtered, "room")
         st.subheader(f"✅ Assigned Families from {start_date.strftime('%d/%m/%Y')} to {end_date.strftime('%d/%m/%Y')}")
         if not assigned_filtered.empty:
             st.write(
