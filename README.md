@@ -1,205 +1,242 @@
-# Room Assignment System (Streamlit + Python)
+Room Assignment System (Streamlit + Python)
 
-A Streamlit app that assigns guests to rooms/campsites for a tourism business.  
-Users upload **two CSVs** (`families.csv` and `rooms.csv`), then the app assigns rooms under hard and soft constraints, provides filters and diagnostics, supports manual overrides and “what‑if” tests, and exports a **Daily Operations Sheet** in Hebrew layout.
+A Streamlit app that assigns guests to rooms/campsites for a tourism business.Users upload two CSVs (families.csv and rooms.csv), then the app assigns rooms under hard and soft constraints, provides filters and diagnostics, supports manual overrides and “what‑if” tests, and exports a Daily Operations Sheet in Hebrew layout.
 
----
+✨ What’s New (Aug 2025)
 
-## ✨ Features
+forced_room is now a hard constraint. If a row has forced_room, the solver will only consider that exact room. If it can’t fit (conflict / wrong type / missing), the row won’t be assigned.
 
-- **CSV uploads** with safe parsing (UTF‑8‑SIG; no accidental `"nan"` strings).
-- **Backtracking solver** with MRV + soft scoring, **per‑room_type solving** and **time/node budgets** so the UI never hangs.
-- **Relaxation ladder** to ensure all rows get assigned when possible: waive **serial** first, then **forced** (soft) constraints.
-- **Soft preferences for “שטח” room_type** (two areas + group-size targets; see below).
-- **Filters & views** (all, by date, by date range; by family & room_type).
-- **Manual override** with **hard‑constraint validation**.
-- **What‑if**: try a single `forced_room` change without touching the main state.
-- **Diagnostics**: soft-constraint report.
-- **Daily Operations Sheet (Printable HTML)** with Hebrew headers:  
-  **יחידה, שם, אנשים, לילות, תוספת, א.בוקר, שולם, לחיוב, הערות**.
+Priority updated: Hard (incl. forced_room) → Serial (same type) → Mixed‑type rules → Field ("שטח") preferences.
 
----
+Solver changes:
 
-## 📁 Repository structure (representative)
+Bookings with forced_room are tried first in the search order.
 
-```
+Candidate generation filters to the forced room when present (true hardening).
+
+Defaults increased: 60s & 500k nodes per room type; ui/runner.py passes these fixed budgets (no sliders).
+
+Diagnostics: added checks for mixed‑type rules and clearer forced‑room explanations.
+
+UI tweak: The “Full Assignment Overview” displays only family, room_type, room_num (display rename of room), check_in, check_out, forced_room.
+
+📁 Repository Structure (representative)
+
 app.py
 ui/
   helpers.py        # session, CSV read, filters, daily sheet builders
   sections.py       # Streamlit sections (overview, date/range, daily sheet, manual override, diagnostics, what-if, logs)
   upload.py         # file inputs and inits
-  runner.py         # run_assignment() – passes time/node budgets to solver
+  runner.py         # run_assignment() – fixed budgets → solver
 logic/
   __init__.py       # exports assign_rooms (from solver), validate, diagnostics, etc.
-  solver.py         # MRV + soft scoring, per-type solving, time/node budgets, legacy wrapper
-  utils.py          # helpers (are_serial, room number parsing, etc.)
+  solver.py         # backtracking (MRV + soft scoring), per-type solving, budgets, forced_room hardened
+  utils.py          # helpers (are_serial, room parsing, intervals, formatting)
   validate.py       # validate_constraints(), rebuild_calendar_from_assignments()
-  diagnostics.py    # explain_soft_constraints()
-```
+  diagnostics.py    # explain_soft_constraints() incl. mixed-type rules
 
-> If you add or move modules, keep `logic/__init__.py` exporting `assign_rooms` from `logic/solver.py`.
+If you add or move modules, keep logic/__init__.py exporting assign_rooms from logic/solver.py.
 
----
+🔧 Installation
 
-## 🔧 Installation
-
-```bash
 # Python 3.10+ recommended
 python -m venv .venv
-source .venv/bin/activate  # (Windows: .venv\Scripts\activate)
-
+source .venv/bin/activate  # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 # If no requirements.txt, minimally:
 pip install streamlit pandas numpy
-```
 
----
+▶️ Running the App
 
-## ▶️ Running the app
-
-```bash
 streamlit run app.py
-```
 
-Open the URL shown by Streamlit in your browser.
+Open the URL shown by Streamlit.
 
----
+📥 CSV Inputs
 
-## 📥 CSV Inputs
+families.csv (one row = one booking)
 
-### `families.csv` (one row = one booking)
+Required columns
 
-**Required columns**
-- `family` (or `full_name` / `שם מלא`)
-- `room_type`
-- `check_in`, `check_out` — format **DD/MM/YYYY** (half-open interval `[check_in, check_out)`)
+family (or full_name / שם מלא)
 
-**Optional columns** (used when present)
-- `forced_room`
-- `people` / `אנשים`
-- `extras` / `תוספת`
-- `breakfast` / `א.בוקר` (truthy values render as ✓ on the Daily Sheet)
-- `paid` / `שולם`
-- `charge` / `לחיוב`
-- `notes` / `הערות`
-- `crib` / `לול` (if truthy, “לול” is appended to notes — configurable)
+room_type
 
-> Empty cells remain empty (no `"nan"`).
+check_in, check_out — format DD/MM/YYYY (half‑open [check_in, check_out))
 
-### `rooms.csv`
+Optional columns (used when present)
 
-- `room_type`
-- `room` (label; may contain a number like “שטח 12” — the number is parsed for preferences)
+forced_room (hard if set)
 
----
+people / אנשים
 
-## 🧠 Solver (logic/solver.py)
+extras / תוספת
 
-**Algorithm:** Backtracking with **MRV** (fewest feasible rooms first) and *value ordering* by soft scores.  
-**Performance:** 
-- **Per‑type solving** (assign each `room_type` independently) to reduce search space.
-- **Budgets** per type: `time_limit_sec` (default **20s**) and `node_limit` (default **150k**).  
-  If a search exceeds the budget, the solver returns the **best partial** assignment so far (max assigned; tiebreak by lowest total soft penalty).
+breakfast / א.בוקר (truthy → ✓ on Daily Sheet)
 
-**Hard constraints**
-- No room double-booking (`[check_in, check_out)` intervals).
-- Must match `room_type` (no cross-type assignment).
-- Families can be assigned multiple rooms (e.g., large families/grouped tents).
+paid / שולם
 
-**Soft constraints**
-1. **Serial adjacency within a family** (bonus if consecutive/“serial” rooms; waived first if needed).  
-2. **Respect `forced_room`** (bonus when matched, mild penalty when not; waived only after serial).  
-3. **שטח (field) room_type logic:**
-   - Two separate areas: **1–5** and **6–18** → prefer keeping a family’s group within one area; **penalize crossing 5↔6**.
-   - Group-size targets (when possible):
-     - 5 rooms → **1,2,3,4,5**
-     - 3 rooms → **12,13,14**
-     - 2 rooms → **16,18**
-     - 1 room → prefer **8,12,17,1,18** (in that order)
+charge / לחיוב
 
-**Relaxation order**
-- Try **serial ON + forced ON** → if no full solution, **waive serial** → if still no full solution, **waive serial + forced**.  
-- The goal is to **assign everyone** when possible, while honoring soft constraints as much as feasible.
+notes / הערות
 
-**Compatibility shims**
-- `assign_per_type(families, rooms, ...)` accepts either **DataFrames** or **lists of dicts** and returns **(assigned_df, unassigned_df, meta)**.  
-- Outputs include columns **`_idx`** and **`id`** for legacy code paths.
+crib / לול
 
----
+CSV parsing is UTF‑8‑SIG; empty cells remain empty (no accidental "nan").
 
-## 🖥️ UI Highlights
+rooms.csv
 
-- **Full Assignment Overview** + filters (by family & room_type). Forced rows are highlighted.
-- **By Date / Date Range** view (uses derived `check_in_dt` / `check_out_dt`).
-- **Daily Operations Sheet (Printable HTML)**  
-  Built only from `families.csv` & `rooms.csv`. Columns:  
-  **יחידה, שם, אנשים, לילות, תוספת, א.בוקר, שולם, לחיוב, הערות**  
-  - **יחידה** comes from assignment if available, otherwise from `forced_room` (if present).  
-  - **לילות** shows `k/n` for the selected date (`k` = current night index; `n` = total nights).  
-  - Download as a single HTML file.
-- **Manual Override** (change a single assigned row; hard-validate; warn on soft breaks).
-- **What‑if** (temporary `forced_room` on a single row to preview impact).
-- **Diagnostics** (soft-constraint explanations) and **Logs** (compact tail + downloadable).
+room_type
 
----
+room (label; may include digits — numeric part is used for some preferences)
 
-## 📅 Date handling
+🧠 Solver (logic/solver.py)
 
-- Dates are expected as **DD/MM/YYYY**.
-- Stays are treated as **half-open**: `[check_in, check_out)`; the guest stays nights starting on `check_in` up to but **not including** `check_out`.
+Algorithm: Backtracking with MRV (fewest feasible rooms first) and value ordering by soft‑penalty score.Decomposition: Per‑type solving (each room_type solved independently) to shrink the search space.Budgets (per type): time_limit_sec = 60.0, node_limit = 500_000 (set in ui/runner.py). When exceeded, the solver returns the best partial assignment so far (most rows placed; tiebreak by lower soft penalty).
 
----
+Hard Constraints
 
-## ⚙️ Configuration knobs
+No double‑booking: For a given (room_type, room), no two intervals [check_in, check_out) may overlap.
 
-- In `ui/runner.py` → `run_assignment()`:
-  - `time_limit_sec`: default **20.0** seconds (per room_type).
-  - `node_limit`: default **150_000** explored nodes (per room_type).
-  - `solve_per_type`: default **True** (recommended).
+Room must exist under its type: Only rooms present in rooms.csv for the room_type are considered.
 
-These can be exposed as Streamlit controls if desired.
+Full‑range availability: Room must be free for the entire requested interval.
 
----
+forced_room is HARD: If set, only that room is considered as a candidate for the row.
 
-## ✅ “Last good version”
+Family may span multiple rows: A family can legitimately receive multiple rooms (business requirement).
 
-Use a tag to bookmark a known‑good state:
+Soft Constraints (in priority order)
 
-```bash
+Tier 1 — Serial adjacency (same type within a family)
+
+If a family has multiple bookings of the same room_type, prefer contiguous/serial room numbers (e.g., WC01→WC02).
+
+Tier 2 — Mixed‑type family rules (as requested)
+
+שטח + זוגי: זוגי must be room 1; שטח must be in 1–5.
+
+שטח + (קבוצתי or סוכה): שטח in 4–7; קבוצתי/סוכה in 1–2.
+
+משפחתי + (בקתה/קבוצתי/סוכה): משפחתי in {4,5,6,8}.
+
+Tier 3 — Field ("שטח") preferences
+
+Prefer one area per group: 1–5 vs 6–18; penalize crossing 5↔6.
+
+Group‑size target sets:
+
+size 5 → [1,2,3,4,5]
+
+size 3 → [12,13,14]
+
+size 2 → [16,18]
+
+size 1 → [8,12,17,1,18]
+
+Avoid splitting clusters across assignments: {2,3}, {9,10,11}, {10,11}, {13,14}, {16,18}.
+
+Singles prohibited in {2,3,4,5,15}; room 15 is last‑priority for singles.
+
+Search Order & Relaxation
+
+Depth order: bookings with forced_room are processed first.
+
+Relaxation ladder (per type):
+
+forced only (serial waived)
+
+forced + serial
+
+relax both (note: forced_room remains hard at candidate generation, so if a forced row can’t fit, there may be no full solution)
+
+🖥️ UI Highlights
+
+📋 Full Assignment Overview: shows only family, room_type, room_num, check_in, check_out, forced_room (and highlights forced rows).Note: room_num is just a display rename of the room column.
+
+📅 Date / Range View: filter by a single date or by range; shows assigned/unassigned with the same columns.
+
+🗂️ Daily Operations Sheet (Printable HTML): Hebrew headersיחידה, שם, אנשים, לילות, תוספת, א.בוקר, שולם, לחיוב, הערות
+
+🛠️ Manual override: apply a room change to a family row and re‑validate (hard constraints enforced; soft warnings shown).
+
+🧪 What‑if: temporary forced_room on a selected input row; compare before/after; download results & log.
+
+🔎 Diagnostics: soft‑constraint report (forced_not_met, non_serial, mixed‑type issues) with reasons and blockers.
+
+🐞 Logs: shows a tail of solver logs; downloadable.
+
+📅 Date Handling
+
+Dates must be DD/MM/YYYY.
+
+Intervals are half‑open: [check_in, check_out) — guests stay nights starting on check_in, up to but not including check_out.
+
+⚙️ Configuration
+
+Fixed budgets in ui/runner.py → run_assignment():
+
+time_limit_sec = 60.0 (per room_type)
+
+node_limit = 500_000 (per room_type)
+
+solve_per_type = True
+
+You can still adjust defaults in logic/solver.py if needed.
+
+🧪 Quick Scenarios (manual testing)
+
+Forced‑room respected
+
+# families.csv
+family,room_type,check_in,check_out,forced_room
+FamA,זוגי,01/09/2025,03/09/2025,2
+
+# rooms.csv
+room,room_type
+1,זוגי
+2,זוגי
+
+Expected: FamA → room 2.
+
+Serial adjacency (same type)
+
+family,room_type,check_in,check_out,forced_room
+FamA,זוגי,01/09/2025,02/09/2025,
+FamA,זוגי,02/09/2025,03/09/2025,
+
+Rooms for זוגי: 1,2,3 → expect two contiguous rooms (e.g., 1 & 2).
+
+Mixed‑type: שטח + זוגי
+
+family,room_type,check_in,check_out,forced_room
+FamA,שטח,01/09/2025,02/09/2025,
+FamA,זוגי,01/09/2025,02/09/2025,
+
+Rooms: זוגי→1; שטח→2,6,7 → expect זוגי=1 and שטח within 1–5 ⇒ choose 2 if free.
+
+✅ “Last Good Version”
+
 git add -A && git commit -m "Save last good version"
 git tag -a last-good-YYYY-MM-DD -m "Last good version"
 git push && git push origin last-good-YYYY-MM-DD
-```
 
----
+🤖 Using ChatGPT with This Repo (optional)
 
-## 🧪 Roadmap / Ideas
+Complex solver design/debugging: o3
 
-- Local-search improvement pass after backtracking (swap/2-opt for soft gains).  
-- UI controls for solver budgets; per-type budget multipliers.  
-- Enriched diagnostics explaining which soft rules were waived and why.  
-- Export Daily Ops Sheet to **Excel/PDF** with styled columns/RTL.  
-- Regression tests with small synthetic CSVs.
+Everyday fast iteration on code/tests: o4‑mini
 
----
+Long‑form refactors/design docs: GPT‑4.1
 
-## 🤖 Using ChatGPT with this repo (optional)
+When sharing screenshots/log images: GPT‑4o
 
-- **Complex solver design or debugging:** use **o3** (best reasoning).  
-- **Everyday fast iteration on code/tests:** use **o4‑mini**.  
-- **Long-form refactors/design docs:** use **GPT‑4.1** (large context).  
-- **When sharing screenshots/log images:** use **GPT‑4o** (multimodal).
+Paste the “Context for New Chat” snippet when opening a fresh chat to onboard the assistant quickly.
 
-Paste the **“Context for New Chat”** snippet from this README when opening a fresh chat to onboard the assistant quickly.
-
----
-
-## 📝 License
+📝 License
 
 Private/internal project (choose a license if/when open‑sourcing).
 
----
+🙋 Support
 
-## 🙋 Support
-
-Open an issue or ping the maintainer with the CSVs (redacted as needed) and the expected behavior.
+Open an issue or share the CSV pair (families.csv, rooms.csv) and the expected behavior. Include any assigned_families.csv and diagnostics for quicker triage.
