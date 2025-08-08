@@ -74,19 +74,10 @@ def _safe_pick_cols(df: pd.DataFrame, wanted: list[str]) -> pd.DataFrame:
 # Recalculate button
 # =========================
 def render_recalc_button():
-    if "use_soft_constraints" not in st.session_state:
-        st.session_state["use_soft_constraints"] = True  # default ON
-
-    # Toggle: calculate with/without soft constraints
-    st.checkbox(
-        "Apply soft constraints (serial & preferences)",
-        key="use_soft_constraints",
-        help="Turn off to compute using only hard constraints and forced rooms.",
-    )
-
-    if not st.session_state.get("families", pd.DataFrame()).empty and not st.session_state.get("rooms", pd.DataFrame()).empty:
+    if not st.session_state["families"].empty and not st.session_state["rooms"].empty:
         if st.button("🔁 Recalculate Assignment"):
             run_assignment()
+
 
 # =========================
 # Assignment Overview (All)
@@ -191,12 +182,10 @@ def render_date_or_range_view():
 
         st.subheader(f"✅ Assigned Families from {start_date.strftime('%d/%m/%Y')} to {end_date.strftime('%d/%m/%Y')}")
         if not assigned_filtered.empty:
-            st.write(
-                assigned_filtered[["family", "room_type", "room_num", "check_in", "check_out", "forced_room"]]
-                    .style.apply(highlight_forced, axis=1)
-            )
-            # NEW: download assigned (range)
+            # Table
             display_cols = ["family", "room_type", "room_num", "check_in", "check_out", "forced_room"]
+            st.write(assigned_filtered[display_cols].style.apply(highlight_forced, axis=1))
+            # NEW: download button (range)
             ex_df = assigned_filtered[display_cols].copy()
             csv_bytes = ex_df.to_csv(index=False).encode("utf-8-sig")
             start_iso = start_date.strftime("%Y-%m-%d")
@@ -245,12 +234,10 @@ def render_date_or_range_view():
 
         st.subheader(f"✅ Assigned Families on {selected_date.strftime('%d/%m/%Y')}")
         if not assigned_filtered.empty:
-            st.write(
-                assigned_filtered[["family", "room_type", "room_num", "check_in", "check_out", "forced_room"]]
-                    .style.apply(highlight_forced, axis=1)
-            )
-            # NEW: download assigned (per day)
+            # Table
             display_cols = ["family", "room_type", "room_num", "check_in", "check_out", "forced_room"]
+            st.write(assigned_filtered[display_cols].style.apply(highlight_forced, axis=1))
+            # NEW: download button (single day)
             ex_df = assigned_filtered[display_cols].copy()
             csv_bytes = ex_df.to_csv(index=False).encode("utf-8-sig")
             iso_day = selected_date.strftime("%Y-%m-%d")
