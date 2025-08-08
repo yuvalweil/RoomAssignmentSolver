@@ -4,6 +4,7 @@ import pandas as pd
 from datetime import datetime as dt
 import html
 import re
+from logic.utils import _room_sort_key  # you already have this
 
 # ----------------- Session & CSV helpers -----------------
 
@@ -54,7 +55,19 @@ def is_empty_opt(val) -> bool:
     s = str(val).strip().lower()
     return s in {"", "nan", "none", "null"}
 
-
+def apply_natural_room_order(df: pd.DataFrame, room_col: str = "room") -> pd.DataFrame:
+    """
+    Make the room column an *ordered categorical* using natural order.
+    Streamlit then sorts by this human order when you click the column.
+    Works for pure numbers (4,5,10) and mixed labels (WC01, WC02, WC10).
+    """
+    if df is None or df.empty or room_col not in df.columns:
+        return df
+    out = df.copy()
+    cats = sorted(out[room_col].astype(str).unique(), key=_room_sort_key)
+    out[room_col] = pd.Categorical(out[room_col].astype(str), categories=cats, ordered=True)
+    return out
+    
 def highlight_forced(row):
     """
     Row-level highlight:
