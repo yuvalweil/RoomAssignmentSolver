@@ -2,7 +2,6 @@ import streamlit as st
 import pandas as pd
 from logic.solver import assign_rooms
 
-
 def run_assignment():
     """
     Recalculate room assignments using fixed solver budgets:
@@ -10,23 +9,24 @@ def run_assignment():
       - node_limit = 500_000 nodes per room_type
       - solve_per_type = True
     """
-    # Initialize or clear log lines
+    # Initialize/clear log
     st.session_state["log_lines"] = []
 
-    # Load input dataframes, ensure defaults
     families_df = st.session_state.get("families", pd.DataFrame())
     rooms_df    = st.session_state.get("rooms", pd.DataFrame())
 
-    # Clear previous assignment outputs
+    # Clear previous outputs
     st.session_state["assigned"]   = pd.DataFrame()
     st.session_state["unassigned"] = pd.DataFrame()
 
-    # Fixed solver budgets
+    # Fixed budgets
     time_limit_sec = 60.0
     node_limit     = 500_000
     solve_per_type = True
 
-    # Run the solver with the static budgets
+    # NEW: read toggle (default True)
+    use_soft = bool(st.session_state.get("use_soft_constraints", True))
+
     assigned_df, unassigned_df = assign_rooms(
         families_df,
         rooms_df,
@@ -34,8 +34,8 @@ def run_assignment():
         time_limit_sec=time_limit_sec,
         node_limit=node_limit,
         solve_per_type=solve_per_type,
+        use_soft=use_soft,   # <<--- pass the flag
     )
 
-    # Store results back in session_state for UI rendering
     st.session_state["assigned"]   = assigned_df
     st.session_state["unassigned"] = unassigned_df
