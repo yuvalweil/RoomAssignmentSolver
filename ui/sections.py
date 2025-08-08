@@ -166,8 +166,7 @@ def render_date_or_range_view():
         )
 
         # Natural sort by room here too
-        assigned_filtered = apply_natural_room_order(assigned_filtered, "room")
-
+        assigned_filtered = sort_by_room_natural(assigned_filtered, "room")
         st.subheader(f"✅ Assigned Families on {selected_date.strftime('%d/%m/%Y')}")
         if not assigned_filtered.empty:
             st.write(
@@ -176,7 +175,7 @@ def render_date_or_range_view():
             )
         else:
             st.info("📭 No assigned families on that date (after filters).")
-
+        assigned_filtered = sort_by_room_natural(assigned_filtered, "room")
         st.subheader(f"⚠️ Unassigned Families on {selected_date.strftime('%d/%m/%Y')}")
         if not unassigned_filtered.empty:
             unv = unassigned_filtered.drop(columns=["id"], errors="ignore")[
