@@ -12,11 +12,14 @@ from .helpers import (
     apply_filters,
     build_day_sheet_sections,   # printable sheet data (now uses only families+rooms; assignment optional)
     daily_sheet_html,           # printable sheet HTML
+    apply_natural_room_order,   # NEW: natural sort for 'room' (uses _room_sort_key)
 )
 from .runner import run_assignment
 from logic import rebuild_calendar_from_assignments, validate_constraints, explain_soft_constraints
 
+# Feature flag to hide Daily Operations Sheet for now
 ENABLE_DAILY_SHEET = False
+
 
 # ---------- Recalculate button ----------------------------------------------
 def render_recalc_button():
@@ -47,17 +50,10 @@ def render_assigned_overview():
             )
 
             if not assigned_all_view.empty:
-                # desired order + rename
-                desired = [
-                    "family",
-                    "room_type",
-                    "room",
-                    "check_in",
-                    "check_out",
-                    "forced_room",
-                ]
-                # reindex will insert any missing cols as NaN → we fill with ""
-                overview = assigned_all_view.reindex(columns=desired).fillna("")
+                # select, reorder (robustly), natural room order, and rename "room" -> "room_num"
+                desired = ["family", "room_type", "room", "check_in", "check_out", "forced_room"]
+                overview = assigned_all_view.reindex(columns=desired).copy()
+                overview = apply_natural_room_order(overview, "room")
                 overview.rename(columns={"room": "room_num"}, inplace=True)
 
                 st.write(overview.style.apply(highlight_forced, axis=1))
@@ -71,14 +67,11 @@ def render_assigned_overview():
         unassigned_df = st.session_state.get("unassigned", pd.DataFrame())
         if not unassigned_df.empty:
             st.subheader("⚠️ Unassigned Families (All)")
-            st.dataframe(
-                unassigned_df.drop(columns=["id"], errors="ignore"),
-                use_container_width=True,
-            )
+            un_df = unassigned_df.drop(columns=["id"], errors="ignore")
+            # Style with forced highlighting too (red when forced but unassigned)
+            st.write(un_df.style.apply(highlight_forced, axis=1))
             csv_un = unassigned_df.to_csv(index=False).encode("utf-8-sig")
             st.download_button("📥 Download Unassigned", csv_un, "unassigned_families.csv", "text/csv")
-
-
 
 
 # ---------- Date or Range View ----------------------------------------------
@@ -129,10 +122,13 @@ def render_date_or_range_view():
             rt_sel_r,  rt_q_r,
         )
 
+        # Natural sort by room for nicer click-to-sort behavior
+        assigned_filtered = apply_natural_room_order(assigned_filtered, "room")
+
         st.subheader(f"✅ Assigned Families from {start_date.strftime('%d/%m/%Y')} to {end_date.strftime('%d/%m/%Y')}")
         if not assigned_filtered.empty:
             st.write(
-                assigned_filtered[["family", "room_type", "room", "check_in", "check_out", "forced_room"]]
+                assigned_filtered[["family", "room", "room_type", "check_in", "check_out", "forced_room"]]
                 .style.apply(highlight_forced, axis=1)
             )
         else:
@@ -140,12 +136,10 @@ def render_date_or_range_view():
 
         st.subheader(f"⚠️ Unassigned Families from {start_date.strftime('%d/%m/%Y')} to {end_date.strftime('%d/%m/%Y')}")
         if not unassigned_filtered.empty:
-            st.dataframe(
-                unassigned_filtered.drop(columns=["id"], errors="ignore")[
-                    ["people", "check_in", "check_out", "room_type", "forced_room"]
-                ],
-                use_container_width=True,
-            )
+            unv = unassigned_filtered.drop(columns=["id"], errors="ignore")[
+                ["people", "check_in", "check_out", "room_type", "forced_room"]
+            ]
+            st.write(unv.style.apply(highlight_forced, axis=1))
         else:
             st.info("📭 No unassigned families in that range.")
     else:
@@ -171,10 +165,13 @@ def render_date_or_range_view():
             rt_sel_d,  rt_q_d,
         )
 
+        # Natural sort by room here too
+        assigned_filtered = apply_natural_room_order(assigned_filtered, "room")
+
         st.subheader(f"✅ Assigned Families on {selected_date.strftime('%d/%m/%Y')}")
         if not assigned_filtered.empty:
             st.write(
-                assigned_filtered[["family", "room_type", "room",  "check_in", "check_out", "forced_room"]]
+                assigned_filtered[["family", "room", "room_type", "check_in", "check_out", "forced_room"]]
                 .style.apply(highlight_forced, axis=1)
             )
         else:
@@ -182,12 +179,10 @@ def render_date_or_range_view():
 
         st.subheader(f"⚠️ Unassigned Families on {selected_date.strftime('%d/%m/%Y')}")
         if not unassigned_filtered.empty:
-            st.dataframe(
-                unassigned_filtered.drop(columns=["id"], errors="ignore")[
-                    ["people", "check_in", "check_out", "room_type", "forced_room"]
-                ],
-                use_container_width=True,
-            )
+            unv = unassigned_filtered.drop(columns=["id"], errors="ignore")[
+                ["people", "check_in", "check_out", "room_type", "forced_room"]
+            ]
+            st.write(unv.style.apply(highlight_forced, axis=1))
         else:
             st.info("📭 No unassigned families on that date.")
 
@@ -195,8 +190,11 @@ def render_date_or_range_view():
 # ---------- Daily Operations Sheet (Printable, inputs-only) ------------------
 def render_daily_operations_sheet():
     """Printable daily sheet using ONLY families.csv + rooms.csv (assignment optional)."""
+    # Hidden for now; flip the flag when you want it back
     if not ENABLE_DAILY_SHEET:
-        return    st.markdown("---")
+        return
+
+    st.markdown("---")
     st.markdown("## 🗂️ Daily Operations Sheet (Printable)")
 
     families_df = st.session_state.get("families", pd.DataFrame())
