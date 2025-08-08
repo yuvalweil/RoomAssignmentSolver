@@ -16,6 +16,7 @@ from .helpers import (
 from .runner import run_assignment
 from logic import rebuild_calendar_from_assignments, validate_constraints, explain_soft_constraints
 
+ENABLE_DAILY_SHEET = False
 
 # ---------- Recalculate button ----------------------------------------------
 def render_recalc_button():
@@ -194,7 +195,8 @@ def render_date_or_range_view():
 # ---------- Daily Operations Sheet (Printable, inputs-only) ------------------
 def render_daily_operations_sheet():
     """Printable daily sheet using ONLY families.csv + rooms.csv (assignment optional)."""
-    st.markdown("---")
+    if not ENABLE_DAILY_SHEET:
+        return    st.markdown("---")
     st.markdown("## 🗂️ Daily Operations Sheet (Printable)")
 
     families_df = st.session_state.get("families", pd.DataFrame())
