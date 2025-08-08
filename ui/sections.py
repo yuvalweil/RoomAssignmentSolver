@@ -5,13 +5,13 @@ from datetime import datetime as dt, time
 
 from .helpers import (
     with_dt_cols,
-    highlight_forced,       # make sure this supports room/room_num (I shared a version earlier)
+    highlight_forced,       # should color green/red for forced rows
     unique_values,
     family_filters_ui,
     roomtype_filters_ui,
     apply_filters,
-    build_day_sheet_sections,   # printable sheet data (hidden for now)
-    daily_sheet_html,           # printable sheet HTML (hidden for now)
+    build_day_sheet_sections,   # printable sheet data (kept but hidden)
+    daily_sheet_html,           # printable sheet HTML (kept but hidden)
 )
 from .runner import run_assignment
 from logic import rebuild_calendar_from_assignments, validate_constraints, explain_soft_constraints
@@ -27,20 +27,37 @@ def render_recalc_button():
             run_assignment()
 
 
-# ---------- Helpers (local) --------------------------------------------------
+# ---------- Local helpers ----------------------------------------------------
 def _add_room_num(df: pd.DataFrame, room_col: str = "room") -> pd.DataFrame:
     """
-    Adds a numeric 'room_num' column parsed from 'room' (digits only).
-    Sorting by 'room_num' fixes lexicographic issues (10 > 4, etc.).
-    Non-numeric rooms get NaN and are placed last when sorting.
+    Adds numeric 'room_num' parsed from digits in room labels.
+    Safe on empty frames. Leaves non-numeric as NaN.
     """
-    if df is None or df.empty or room_col not in df.columns:
+    if df is None or df.empty:
         return df
     out = df.copy()
-    out["room_num"] = (
-        out[room_col].astype(str).str.extract(r"(\d+)", expand=False)
-    )
-    out["room_num"] = pd.to_numeric(out["room_num"], errors="coerce")
+    if room_col in out.columns:
+        out["room_num"] = out[room_col].astype(str).str.extract(r"(\d+)", expand=False)
+        out["room_num"] = pd.to_numeric(out["room_num"], errors="coerce")
+    return out
+
+
+def _safe_sort_by_room(df: pd.DataFrame, room_col: str = "room") -> pd.DataFrame:
+    """
+    Safely sort by room_num (then room) if present; otherwise return df unchanged.
+    Never raises KeyError on missing columns or empty frames.
+    """
+    if df is None or df.empty:
+        return df
+    out = _add_room_num(df, room_col)
+    cols = out.columns
+    if "room_num" in cols and room_col in cols:
+        return out.sort_values(["room_num", room_col], na_position="last", kind="stable", ignore_index=True)
+    if "room_num" in cols:
+        return out.sort_values(["room_num"], na_position="last", kind="stable", ignore_index=True)
+    if room_col in cols:
+        # fallback: lexical (no numeric data available)
+        return out.sort_values([room_col], kind="stable", ignore_index=True)
     return out
 
 
@@ -66,13 +83,10 @@ def render_assigned_overview():
             )
 
             if not assigned_all_view.empty:
-                # Build overview, add room_num, sort by it, and display only requested columns
+                # select, add numeric room_num, sort by it, and show requested columns/order
                 desired = ["family", "room_type", "room", "check_in", "check_out", "forced_room"]
                 overview = assigned_all_view.reindex(columns=desired).copy()
-                overview = _add_room_num(overview, "room")
-                overview = overview.sort_values(["room_num", "room"], na_position="last", kind="stable")
-
-                # Final displayed columns/order (room -> room_num)
+                overview = _safe_sort_by_room(overview, "room")
                 display_cols = ["family", "room_type", "room_num", "check_in", "check_out", "forced_room"]
                 st.write(overview[display_cols].style.apply(highlight_forced, axis=1))
             else:
@@ -139,9 +153,8 @@ def render_date_or_range_view():
             rt_sel_r,  rt_q_r,
         )
 
-        # Add numeric room_num and sort by it
-        assigned_filtered = _add_room_num(assigned_filtered, "room")
-        assigned_filtered = assigned_filtered.sort_values(["room_num", "room"], na_position="last", kind="stable")
+        # Add numeric room_num and safe sort by it
+        assigned_filtered = _safe_sort_by_room(assigned_filtered, "room")
 
         st.subheader(f"✅ Assigned Families from {start_date.strftime('%d/%m/%Y')} to {end_date.strftime('%d/%m/%Y')}")
         if not assigned_filtered.empty:
@@ -183,9 +196,8 @@ def render_date_or_range_view():
             rt_sel_d,  rt_q_d,
         )
 
-        # Add numeric room_num and sort by it
-        assigned_filtered = _add_room_num(assigned_filtered, "room")
-        assigned_filtered = assigned_filtered.sort_values(["room_num", "room"], na_position="last", kind="stable")
+        # Add numeric room_num and safe sort by it
+        assigned_filtered = _safe_sort_by_room(assigned_filtered, "room")
 
         st.subheader(f"✅ Assigned Families on {selected_date.strftime('%d/%m/%Y')}")
         if not assigned_filtered.empty:
