@@ -21,6 +21,13 @@ def ensure_session_keys() -> None:
     for k, v in defaults:
         if k not in st.session_state:
             st.session_state[k] = v
+            
+def sort_by_room_natural(df: pd.DataFrame, room_col: str = "room") -> pd.DataFrame:
+    """Return df sorted by room using natural (human) order."""
+    if df is None or df.empty or room_col not in df.columns:
+        return df
+    # map each room value -> a sortable key via _room_sort_key
+    return df.sort_values(by=room_col, key=lambda s: s.astype(str).map(_room_sort_key))
 
 def read_csv(file):
     """Read CSV with sane defaults (handle Hebrew headers and avoid 'nan' strings)."""
