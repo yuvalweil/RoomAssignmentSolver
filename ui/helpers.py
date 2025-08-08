@@ -3,6 +3,7 @@ import streamlit as st
 import pandas as pd
 from datetime import datetime as dt
 import html
+import re
 
 # ----------------- Session & CSV helpers -----------------
 
@@ -53,9 +54,38 @@ def is_empty_opt(val) -> bool:
     s = str(val).strip().lower()
     return s in {"", "nan", "none", "null"}
 
+
 def highlight_forced(row):
-    """Styler: highlight rows that have a forced_room value."""
-    return ["background-color: #fff9c4"] * len(row) if not is_empty_opt(row.get("forced_room", "")) else [""] * len(row)
+    """
+    Row-level highlight:
+      - green when forced_room is set and equals assigned room
+      - red   when forced_room is set but not met (or unassigned)
+      - no color when forced_room is empty
+    Works with either 'room' or 'room_num' in the DataFrame.
+    """
+    fr = str(row.get("forced_room", "")).strip()
+    if not fr:
+        return [""] * len(row)
+
+    def norm(val):
+        s = str(val).strip()
+        if s == "":
+            return ""
+        m = re.search(r"(\d+)", s)
+        # If there are digits, compare by numeric core; otherwise compare as-is
+        return m.group(1) if m else s
+
+    assigned = ""
+    # Prefer 'room' if present; fall back to 'room_num' (used in overview display)
+    if "room" in row.index:
+        assigned = str(row.get("room", "")).strip()
+    if not assigned and "room_num" in row.index:
+        assigned = str(row.get("room_num", "")).strip()
+
+    ok = (assigned != "") and (norm(assigned) == norm(fr))
+
+    color = "background-color: #e6ffed" if ok else "background-color: #ffe6e6"
+    return [color] * len(row)
 
 def unique_values(df: pd.DataFrame, col: str) -> list[str]:
     """Safely get sorted unique values or empty list if col missing/empty df."""
