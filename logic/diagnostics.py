@@ -1,10 +1,11 @@
+# logic/diagnostics.py
+
 from __future__ import annotations
 from typing import Dict, List, Tuple, DefaultDict
 import pandas as pd
 
 from .utils import _parse_date, _norm_room, _room_sort_key, _overlaps, are_serial, DATE_FMT
 from .core import assign_rooms  # (optional; not used here but handy if you extend)
-# (No dependency on global calendars)
 
 def _schedules_from_df(assigned_df: pd.DataFrame):
     sched: Dict[Tuple[str, str], List[Tuple]] = {}
@@ -53,7 +54,11 @@ def _perfect_matching(choices: Dict[int, List[str]]) -> bool:
             return False
     return True
 
-def explain_soft_constraints(assigned_df: pd.DataFrame, families_df: pd.DataFrame, rooms_df: pd.DataFrame) -> pd.DataFrame:
+def explain_soft_constraints(
+    assigned_df: pd.DataFrame,
+    families_df: pd.DataFrame,
+    rooms_df: pd.DataFrame
+) -> pd.DataFrame:
     results: List[dict] = []
     if assigned_df is None or assigned_df.empty:
         return pd.DataFrame(results)
@@ -226,5 +231,92 @@ def explain_soft_constraints(assigned_df: pd.DataFrame, families_df: pd.DataFram
             "reason": reason,
             "blockers": blockers,
         })
+
+    # C) New multi–room-type soft constraints
+    def to_int(r):
+        try:
+            return int(str(r))
+        except Exception:
+            return None
+
+    for fam, grp in assigned_df.groupby("family"):
+        types = [str(t).strip() for t in grp["room_type"]]
+        room_map = {
+            rt: to_int(grp.loc[grp["room_type"] == rt, "room"].iat[0])
+            for rt in types
+        }
+
+        # Rule 1: 'שטח' + 'זוגי'
+        if "שטח" in types and "זוגי" in types:
+            # זוגי → room 1
+            r_zug = room_map.get("זוגי")
+            if r_zug != 1:
+                results.append({
+                    "violation": "mixed_שטח_זוגי",
+                    "family": fam, "room_type": "זוגי",
+                    "check_in": "", "check_out": "",
+                    "forced_room": "", "assigned_room": r_zug,
+                    "assigned_rooms": "",
+                    "feasible_serial_block": "",
+                    "reason": f"זוגי must be in room 1, but is in {r_zug}",
+                    "blockers": "",
+                })
+            # שטח → 1–5
+            r_shatach = room_map.get("שטח")
+            if r_shatach is None or not (1 <= r_shatach <= 5):
+                results.append({
+                    "violation": "mixed_שטח_זוגי",
+                    "family": fam, "room_type": "שטח",
+                    "check_in": "", "check_out": "",
+                    "forced_room": "", "assigned_room": r_shatach,
+                    "assigned_rooms": "",
+                    "feasible_serial_block": "",
+                    "reason": f"שטח must be in rooms 1–5, but is in {r_shatach}",
+                    "blockers": "",
+                })
+
+        # Rule 2: 'שטח' + ('קבוצתי' or 'סוכה')
+        if "שטח" in types and any(x in types for x in ["קבוצתי", "סוכה"]):
+            r_shatach = room_map.get("שטח")
+            if r_shatach is None or not (4 <= r_shatach <= 7):
+                results.append({
+                    "violation": "mixed_שטח_קבוצתי_סוכה",
+                    "family": fam, "room_type": "שטח",
+                    "check_in": "", "check_out": "",
+                    "forced_room": "", "assigned_room": r_shatach,
+                    "assigned_rooms": "",
+                    "feasible_serial_block": "",
+                    "reason": f"שטח with קבוצתי/סוכה must be in rooms 4–7, but is in {r_shatach}",
+                    "blockers": "",
+                })
+            for grp_type in ("קבוצתי", "סוכה"):
+                if grp_type in types:
+                    r_grp = room_map.get(grp_type)
+                    if r_grp is None or not (1 <= r_grp <= 2):
+                        results.append({
+                            "violation": "mixed_שטח_קבוצתי_סוכה",
+                            "family": fam, "room_type": grp_type,
+                            "check_in": "", "check_out": "",
+                            "forced_room": "", "assigned_room": r_grp,
+                            "assigned_rooms": "",
+                            "feasible_serial_block": "",
+                            "reason": f"{grp_type} must be in rooms 1–2 when with שטח, but is in {r_grp}",
+                            "blockers": "",
+                        })
+
+        # Rule 3: 'משפחתי' + ('בקתה','קבוצתי','סוכה')
+        if "משפחתי" in types and any(x in types for x in ["בקתה", "קבוצתי", "סוכה"]):
+            r_mishpa = room_map.get("משפחתי")
+            if r_mishpa is None or r_mishpa not in {4, 5, 6, 8}:
+                results.append({
+                    "violation": "mixed_משפחתי_אחר",
+                    "family": fam, "room_type": "משפחתי",
+                    "check_in": "", "check_out": "",
+                    "forced_room": "", "assigned_room": r_mishpa,
+                    "assigned_rooms": "",
+                    "feasible_serial_block": "",
+                    "reason": f"משפחתי must be in rooms 4,5,6,8 when with בקתה/קבוצתי/סוכה, but is in {r_mishpa}",
+                    "blockers": "",
+                })
 
     return pd.DataFrame(results)

@@ -1,35 +1,41 @@
-from __future__ import annotations
 import streamlit as st
-from datetime import datetime as dt
-from logic import assign_rooms, validate_constraints
-
-def log_collector():
-    def _log(msg: str):
-        ts = dt.now().strftime("%Y-%m-%d %H:%M:%S")
-        st.session_state["log_lines"].append(f"[{ts}] {msg}")
-    return _log
+import pandas as pd
+from logic.solver import assign_rooms
 
 def run_assignment():
-    """Run the solver, store results in session_state, and show quick feedback."""
-    try:
-        st.session_state["log_lines"] = []
-        log_func = log_collector()
-        assigned_df, unassigned_df = assign_rooms(
-            st.session_state["families"],
-            st.session_state["rooms"],
-            log_func=log_func,
-        )
-        st.session_state["assigned"]   = assigned_df
-        st.session_state["unassigned"] = unassigned_df
+    """
+    Recalculate room assignments using fixed solver budgets:
+      - time_limit_sec = 60.0 seconds per room_type
+      - node_limit = 500_000 nodes per room_type
+      - solve_per_type = True
+    """
+    # Initialize/clear log
+    st.session_state["log_lines"] = []
 
-        hard_ok, soft_violations = validate_constraints(assigned_df)
-        if hard_ok:
-            st.success("✅ Room assignment completed. No hard constraint violations.")
-        else:
-            st.error("❌ Assignment finished with HARD constraint violations. Please review.")
-        if soft_violations:
-            with st.expander("ℹ️ Soft constraint warnings", expanded=False):
-                for s in soft_violations:
-                    st.write(f"• {s}")
-    except Exception as e:
-        st.error(f"❌ Assignment error: {e}")
+    families_df = st.session_state.get("families", pd.DataFrame())
+    rooms_df    = st.session_state.get("rooms", pd.DataFrame())
+
+    # Clear previous outputs
+    st.session_state["assigned"]   = pd.DataFrame()
+    st.session_state["unassigned"] = pd.DataFrame()
+
+    # Fixed budgets
+    time_limit_sec = 60.0
+    node_limit     = 500_000
+    solve_per_type = True
+
+    # NEW: read toggle (default True)
+    use_soft = bool(st.session_state.get("use_soft_constraints", True))
+
+    assigned_df, unassigned_df = assign_rooms(
+        families_df,
+        rooms_df,
+        log_func=lambda msg: st.session_state["log_lines"].append(msg),
+        time_limit_sec=time_limit_sec,
+        node_limit=node_limit,
+        solve_per_type=solve_per_type,
+        use_soft=use_soft,   # <<--- pass the flag
+    )
+
+    st.session_state["assigned"]   = assigned_df
+    st.session_state["unassigned"] = unassigned_df

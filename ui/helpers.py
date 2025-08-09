@@ -3,6 +3,8 @@ import streamlit as st
 import pandas as pd
 from datetime import datetime as dt
 import html
+import re
+from logic.utils import _room_sort_key  # you already have this
 
 # ----------------- Session & CSV helpers -----------------
 
@@ -19,6 +21,13 @@ def ensure_session_keys() -> None:
     for k, v in defaults:
         if k not in st.session_state:
             st.session_state[k] = v
+            
+def sort_by_room_natural(df: pd.DataFrame, room_col: str = "room") -> pd.DataFrame:
+    """Return df sorted by room using natural (human) order."""
+    if df is None or df.empty or room_col not in df.columns:
+        return df
+    # map each room value -> a sortable key via _room_sort_key
+    return df.sort_values(by=room_col, key=lambda s: s.astype(str).map(_room_sort_key))
 
 def read_csv(file):
     """Read CSV with sane defaults (handle Hebrew headers and avoid 'nan' strings)."""
@@ -53,9 +62,50 @@ def is_empty_opt(val) -> bool:
     s = str(val).strip().lower()
     return s in {"", "nan", "none", "null"}
 
+def apply_natural_room_order(df: pd.DataFrame, room_col: str = "room") -> pd.DataFrame:
+    """
+    Make the room column an *ordered categorical* using natural order.
+    Streamlit then sorts by this human order when you click the column.
+    Works for pure numbers (4,5,10) and mixed labels (WC01, WC02, WC10).
+    """
+    if df is None or df.empty or room_col not in df.columns:
+        return df
+    out = df.copy()
+    cats = sorted(out[room_col].astype(str).unique(), key=_room_sort_key)
+    out[room_col] = pd.Categorical(out[room_col].astype(str), categories=cats, ordered=True)
+    return out
+    
 def highlight_forced(row):
-    """Styler: highlight rows that have a forced_room value."""
-    return ["background-color: #fff9c4"] * len(row) if not is_empty_opt(row.get("forced_room", "")) else [""] * len(row)
+    """
+    Row-level highlight:
+      - green when forced_room is set and equals assigned room
+      - red   when forced_room is set but not met (or unassigned)
+      - no color when forced_room is empty
+    Works with either 'room' or 'room_num' in the DataFrame.
+    """
+    fr = str(row.get("forced_room", "")).strip()
+    if not fr:
+        return [""] * len(row)
+
+    def norm(val):
+        s = str(val).strip()
+        if s == "":
+            return ""
+        m = re.search(r"(\d+)", s)
+        # If there are digits, compare by numeric core; otherwise compare as-is
+        return m.group(1) if m else s
+
+    assigned = ""
+    # Prefer 'room' if present; fall back to 'room_num' (used in overview display)
+    if "room" in row.index:
+        assigned = str(row.get("room", "")).strip()
+    if not assigned and "room_num" in row.index:
+        assigned = str(row.get("room_num", "")).strip()
+
+    ok = (assigned != "") and (norm(assigned) == norm(fr))
+
+    color = "background-color: #e6ffed" if ok else "background-color: #ffe6e6"
+    return [color] * len(row)
 
 def unique_values(df: pd.DataFrame, col: str) -> list[str]:
     """Safely get sorted unique values or empty list if col missing/empty df."""
