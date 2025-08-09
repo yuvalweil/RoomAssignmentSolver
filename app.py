@@ -21,7 +21,21 @@ from ui.sections import (
     render_logs,
 )
 
-st.set_page_config(page_title="Room Assignment", layout="wide")
+st.set_page_config(
+    page_title="Room Assignment",
+    layout="wide",
+    initial_sidebar_state="collapsed",
+)
+
+st.markdown(
+    """
+    <style>
+        [data-testid="stSidebar"] { display: none; }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
 st.title("🏕️ Room Assignment System")
 
 # init session keys
