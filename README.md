@@ -240,3 +240,25 @@ Private/internal project (choose a license if/when open‑sourcing).
 🙋 Support
 
 Open an issue or share the CSV pair (families.csv, rooms.csv) and the expected behavior. Include any assigned_families.csv and diagnostics for quicker triage.
+
+🔗 Google Sheets Integration
+
+A small Flask service (`gsheets_service.py`) lets a Google Sheet trigger the solver and receive the results back in the same document.
+
+1. Share your Sheet with a Google service account and save its credentials JSON as `service_account.json` (or set `GOOGLE_APPLICATION_CREDENTIALS`).
+2. Run the service: `python gsheets_service.py` (deploy somewhere reachable by Google).
+3. Add an Apps Script button in the Sheet:
+
+```javascript
+function runSolver() {
+  const url = 'https://YOUR_SERVER/solve';
+  const payload = { spreadsheet_id: SpreadsheetApp.getActive().getId() };
+  UrlFetchApp.fetch(url, {
+    method: 'post',
+    contentType: 'application/json',
+    payload: JSON.stringify(payload),
+  });
+}
+```
+
+The service reads data from tabs named `families` and `rooms` and writes assignments to `assigned` and `unassigned`.

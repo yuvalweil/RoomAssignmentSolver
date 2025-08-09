@@ -2,3 +2,6 @@
  pandas
  python-dateutil
 ortools
+gspread
+gspread-dataframe
+flask
