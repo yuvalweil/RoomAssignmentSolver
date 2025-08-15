@@ -29,13 +29,20 @@ def sort_by_room_natural(df: pd.DataFrame, room_col: str = "room") -> pd.DataFra
     # map each room value -> a sortable key via _room_sort_key
     return df.sort_values(by=room_col, key=lambda s: s.astype(str).map(_room_sort_key))
 
-def read_csv(file):
-    """Read CSV with sane defaults (handle Hebrew headers and avoid 'nan' strings)."""
+def read_csv(src):
+    """Read CSV from an uploaded file or a URL.
+
+    Uses UTF‑8‑SIG decoding and avoids converting empty cells to ``"nan"``.
+    ``src`` may be a file-like object (e.g. ``BytesIO``) or a string/URL.
+    """
     try:
-        return pd.read_csv(file, encoding="utf-8-sig", keep_default_na=False, na_filter=False)
+        return pd.read_csv(src, encoding="utf-8-sig", keep_default_na=False, na_filter=False)
     except Exception:
-        file.seek(0)
-        return pd.read_csv(file, keep_default_na=False, na_filter=False)
+        # If this is a file-like object, reset the pointer and try again with
+        # default encoding (some browsers omit the BOM).
+        if hasattr(src, "seek"):
+            src.seek(0)
+        return pd.read_csv(src, keep_default_na=False, na_filter=False)
 
 # ----------------- DataFrame helpers -----------------
 

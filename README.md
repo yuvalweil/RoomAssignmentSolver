@@ -1,6 +1,6 @@
 Room Assignment System (Streamlit + Python)
 
-A Streamlit app that assigns guests to rooms/campsites for a tourism business.Users upload two CSVs (families.csv and rooms.csv), then the app assigns rooms under hard and soft constraints, provides filters and diagnostics, supports manual overrides and “what‑if” tests, and exports a Daily Operations Sheet in Hebrew layout.
+A Streamlit app that assigns guests to rooms/campsites for a tourism business. Users can upload or link two CSVs (families.csv and rooms.csv), then the app assigns rooms under hard and soft constraints, provides filters and diagnostics, supports manual overrides and “what‑if” tests, and exports a Daily Operations Sheet in Hebrew layout.
 
 ✨ What’s New (Aug 2025)
 
@@ -53,6 +53,8 @@ streamlit run app.py
 Open the URL shown by Streamlit.
 
 📥 CSV Inputs
+
+You may upload the CSV files directly or provide links to them. Use the toggle in the app's upload section to choose the method.
 
 families.csv (one row = one booking)
 
