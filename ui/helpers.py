@@ -54,6 +54,8 @@ def read_csv(src):
 
     Uses UTF‑8‑SIG decoding and avoids converting empty cells to ``"nan"``.
     ``src`` may be a file-like object (e.g. ``BytesIO``) or a string/URL.
+    Automatically detects common delimiters, checks for HTML responses, and
+    provides user-friendly errors.
     Automatically detects common delimiters and provides user-friendly errors.
     """
     start = _peek_start(src)
