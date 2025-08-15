@@ -4,6 +4,7 @@ import pandas as pd
 from datetime import datetime as dt
 import html
 import re
+from urllib.request import urlopen
 from logic.utils import _room_sort_key  # you already have this
 
 # ----------------- Session & CSV helpers -----------------
@@ -29,20 +30,65 @@ def sort_by_room_natural(df: pd.DataFrame, room_col: str = "room") -> pd.DataFra
     # map each room value -> a sortable key via _room_sort_key
     return df.sort_values(by=room_col, key=lambda s: s.astype(str).map(_room_sort_key))
 
+def _peek_start(src, size: int = 1024) -> bytes:
+    """Return up to ``size`` bytes from the start of ``src`` without consuming it."""
+    try:
+        if hasattr(src, "read") and hasattr(src, "seek") and hasattr(src, "tell"):
+            pos = src.tell()
+            data = src.read(size)
+            src.seek(pos)
+            return data
+        if isinstance(src, str):
+            if src.startswith(("http://", "https://")):
+                with urlopen(src) as resp:
+                    return resp.read(size)
+            with open(src, "rb") as fh:
+                return fh.read(size)
+    except Exception:
+        pass
+    return b""
+
+
 def read_csv(src):
     """Read CSV from an uploaded file or a URL.
 
     Uses UTF‑8‑SIG decoding and avoids converting empty cells to ``"nan"``.
     ``src`` may be a file-like object (e.g. ``BytesIO``) or a string/URL.
+    Automatically detects common delimiters and provides user-friendly errors.
     """
+    start = _peek_start(src)
+    if b"<html" in start.lower():
+        raise ValueError("The provided source returned HTML, not CSV. Check the URL or file.")
     try:
-        return pd.read_csv(src, encoding="utf-8-sig", keep_default_na=False, na_filter=False)
+        return pd.read_csv(
+            src,
+            encoding="utf-8-sig",
+            keep_default_na=False,
+            na_filter=False,
+            sep=None,
+            engine="python",
+        )
+    except pd.errors.ParserError as exc:
+        raise ValueError(
+            "Could not parse CSV. The file may be invalid or use an unexpected delimiter."
+        ) from exc
     except Exception:
         # If this is a file-like object, reset the pointer and try again with
         # default encoding (some browsers omit the BOM).
         if hasattr(src, "seek"):
             src.seek(0)
-        return pd.read_csv(src, keep_default_na=False, na_filter=False)
+        try:
+            return pd.read_csv(
+                src,
+                keep_default_na=False,
+                na_filter=False,
+                sep=None,
+                engine="python",
+            )
+        except pd.errors.ParserError as exc:
+            raise ValueError(
+                "Could not parse CSV. The file may be invalid or use an unexpected delimiter."
+            ) from exc
 
 # ----------------- DataFrame helpers -----------------
 
