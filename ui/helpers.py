@@ -56,6 +56,7 @@ def read_csv(src):
     ``src`` may be a file-like object (e.g. ``BytesIO``) or a string/URL.
     Automatically detects common delimiters, checks for HTML responses, and
     provides user-friendly errors.
+    Automatically detects common delimiters and provides user-friendly errors.
     """
     start = _peek_start(src)
     if b"<html" in start.lower():
